@@ -1,0 +1,42 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# env / secrets (no hay .env.example: la lista de variables vive en el README)
+.env
+.env.*
+
+# discovery artifacts: HAR files contain real credentials, cookies and session
+# tokens. NEVER commit anything under discovery/output/.
+discovery/output/
+
+# session artifacts persisted at runtime (cookie jars, tokens)
+.session/
+*.session.json
+
+# config comercial real (rebajas/comisiones por aseguradora) -- info de negocio
+# del broker. Se regenera con `npm run discovery:comercial` (ver README).
+config/absa-comercial.json
+
+# mapeo de propiedades custom de HubSpot -- especifico de cada portal (ver README).
+config/hubspot-properties.json
+
+# cola de leads pendientes de cotizar -- contiene PII de leads (nombre, DNI, etc).
+.queue/
+
+# resultados de `npm run cotizar` -- traen datos del asegurado y premios reales.
+salida/
+
+# logs
+*.log
+logs/
+
+# editor / os
+.DS_Store
+.vscode/
+.idea/
+
+# test / coverage
+coverage/

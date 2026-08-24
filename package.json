@@ -1,0 +1,46 @@
+{
+  "name": "absa-cotizador",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cliente no oficial para cotizar en ABSA net reutilizando una sesion de broker autenticada.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev:api": "tsx watch src/api/server.ts",
+    "start:api": "node dist/api/server.js",
+    "discovery:capture": "tsx discovery/capture-har.ts",
+    "discovery:parse": "tsx discovery/parse-har.ts",
+    "discovery:comercial": "tsx discovery/extract-comercial.ts",
+    "cotizar": "tsx src/cotizar-cli.ts",
+    "versiones": "tsx src/versiones-cli.ts",
+    "smoke-test": "tsx src/smoke-test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "got": "^14.4.2",
+    "pdfkit": "^0.15.2",
+    "pino": "^9.3.2",
+    "tough-cookie": "^4.1.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.10",
+    "@types/pdfkit": "^0.17.6",
+    "@types/tough-cookie": "^4.0.5",
+    "nock": "^13.5.4",
+    "playwright": "^1.45.0",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3",
+    "vitest": "^2.0.3"
+  }
+}

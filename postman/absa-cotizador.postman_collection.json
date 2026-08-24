@@ -1,0 +1,112 @@
+{
+  "info": {
+    "name": "absa-cotizador",
+    "description": "Cotizador de ABSA net.\n\nEl servicio expone **dos rutas**: `GET /health` y `POST /webhooks/hubspot/absa`. No hay API de cotización: para cotizar a mano está el CLI (`npm run cotizar`), que no necesita el servidor levantado.\n\n## Antes de empezar\n\n- `baseUrl`: `http://localhost:3000` (local) o `https://api.tu-dominio.com` (VPS).\n- `webhookSecret`: el `HUBSPOT_WEBHOOK_SECRET` del `.env`.\n- `dealId`: el id de un Deal REAL de HubSpot.\n\n## Qué esperar\n\nEl webhook responde `202` al instante y cotiza en segundo plano. El resultado **no viene en la respuesta**: se escribe en el Deal (`absa_estado`, `absa_numero_cotizacion`, `cotizacion_absa`) 3-4 minutos después.\n\n**Cada llamada cotiza de verdad**: consume la sesión del broker y deja la cotización guardada en la cuenta de ABSA.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "webhookSecret",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "dealId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Chequeo de vida. No pide secreto. Si esto no responde, el servicio no está levantado (o nginx no está proxyando)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('responde 200', () => pm.response.to.have.status(200));",
+              "pm.test('dice que es absa-cotizador', () => pm.expect(pm.response.json().service).to.eql('absa-cotizador'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook de lead (lo que dispara el formulario)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-webhook-secret",
+            "value": "{{webhookSecret}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dealId\": \"{{dealId}}\",\n  \"contactId\": \"\",\n  \"firstname\": \"Juan\",\n  \"lastname\": \"Perez\",\n  \"dni\": \"30123456\",\n  \"sexo\": \"M\",\n  \"fecha_nacimiento\": \"1990-01-15\",\n  \"codigo_postal\": \"1425\",\n  \"provincia\": \"1\",\n  \"marca_vehiculo\": \"CHEVROLET\",\n  \"modelo_vehiculo\": \"TRACKER\",\n  \"version_vehiculo\": \"1.2 TURBO AT PREMIER\",\n  \"anio_vehiculo\": \"2021\",\n  \"patente\": \"AB123CD\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/webhooks/hubspot/absa",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "webhooks",
+            "hubspot",
+            "absa"
+          ]
+        },
+        "description": "El request que va a hacer FormLeads después de crear el Contact y el Deal. Responde 202 al instante y cotiza en segundo plano; el resultado se escribe en el **Deal** (propiedades `absa_*` y `cotizacion_absa`), no en esta respuesta.\n\nRequisitos del lado del servidor:\n\n- `HUBSPOT_ACCESS_TOKEN` y `HUBSPOT_WEBHOOK_SECRET` seteados (si falta alguno, este endpoint **no existe** y da 404).\n- `config/hubspot-properties.json` creado. Si falta, el lead se cotiza igual (3-4 min) y recién ahí falla al escribir el Deal.\n\n`sexo` es obligatorio; `estado_civil` se asume Casado; el `dni` es opcional.\n\nSi mandás el mismo `dealId` dos veces mientras la primera está en curso, responde `duplicado: true` y no encola de nuevo."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 404) {",
+              "  console.log('404: el webhook no está montado. Faltan HUBSPOT_ACCESS_TOKEN y/o HUBSPOT_WEBHOOK_SECRET en el .env del servidor.');",
+              "} else if (pm.response.code === 401) {",
+              "  console.log('401: el header x-webhook-secret no coincide con HUBSPOT_WEBHOOK_SECRET.');",
+              "} else {",
+              "  pm.test('encolado (202)', () => pm.response.to.have.status(202));",
+              "  const body = pm.response.json();",
+              "  if (body.duplicado) console.log('Ese Deal ya tenía una cotización en vuelo: no se encoló otra.');",
+              "  else console.log('Encolado. Mirá el Deal ' + pm.collectionVariables.get('dealId') + ' en 3-4 minutos.');",
+              "}"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

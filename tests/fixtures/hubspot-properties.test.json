@@ -1,0 +1,13 @@
+{
+  "properties": {
+    "estado": "absa_estado",
+    "numeroCotizacion": "absa_numero_cotizacion",
+    "mejorPremio": "absa_mejor_premio",
+    "mejorAseguradora": "absa_mejor_aseguradora",
+    "cantidadOpciones": "absa_cantidad_opciones",
+    "opcionesJson": "absa_opciones_json",
+    "cotizadoEn": "absa_cotizado_en",
+    "errorMensaje": "absa_error_mensaje",
+    "cotizacionUrl": "cotizacion_absa"
+  }
+}

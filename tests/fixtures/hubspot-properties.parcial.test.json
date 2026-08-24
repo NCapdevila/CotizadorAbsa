@@ -1,0 +1,8 @@
+{
+  "properties": {
+    "estado": "absa_estado",
+    "numeroCotizacion": "absa_numero_cotizacion",
+    "errorMensaje": "absa_error_mensajes",
+    "cotizacionUrl": "cotizacion_absa"
+  }
+}

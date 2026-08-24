@@ -1,0 +1,16 @@
+{
+  "idOrganizador": 1,
+  "idUsuario": 1,
+  "idProductor": 1,
+  "idConfiguracion": 1,
+  "comision": 20,
+  "idTipoPago": 3,
+  "aseguradoras": [
+    { "id": 2, "nombre": "ZURICH" },
+    { "id": 21, "nombre": "SANCOR" }
+  ],
+  "camposPorAseguradora": {
+    "Comercial.RebajaZurich": 30,
+    "Poliza.id_TipoPolizaSancor": 3
+  }
+}
