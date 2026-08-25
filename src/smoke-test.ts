@@ -1,70 +1,100 @@
 /**
- * Fase 4 — Smoke test / health-check.
+ * Canario: chequea que la integracion con ABSA net siga viva.
  *
- * Corre una cotizacion de referencia contra ABSA net real y reporta
- * exito/fallo de forma inequivoca (exit code + log). Pensado para
- * correrse periodicamente desde afuera (cron, un scheduled job, etc) —
- * este script no se agenda solo.
+ * Pensado para correr solo (cron diario) y avisar por exit code. Verifica, en
+ * este orden, las tres cosas que se rompen en la practica:
  *
- * Uso:
- *   npm run smoke-test
+ *   1. Las credenciales y el login (lo que fallo el 2026-08-24: la sesion
+ *      guardada tapaba unas credenciales invalidas hasta que se limpio).
+ *   2. Que el catalogo siga respondiendo JSON con la forma esperada.
+ *   3. Que el matcher siga encontrando el vehiculo de referencia.
  *
- * El caso de referencia (REFERENCE_INPUT abajo) es un placeholder: una vez
- * completada la Fase 0, reemplazarlo por un caso real y estable (ej. un
- * vehiculo/perfil que se sepa que ABSA siempre puede cotizar) para que las
- * fallas reflejen problemas de la integracion y no datos invalidos.
+ * NO cotiza a proposito: cotizar tarda 3-4 minutos, deja una cotizacion
+ * registrada en la cuenta del broker y le mete carga a ABSA. Esto son cuatro
+ * GETs de solo lectura y termina en segundos, asi que se puede correr seguido
+ * sin ensuciar nada.
+ *
+ * Lo que NO cubre: el parseo de las propuestas (esa parte solo se ejercita
+ * cotizando de verdad). Para eso, de vez en cuando:
+ *   npm run cotizar -- --marca CHEVROLET --modelo TRACKER --version "1.2T AT PREMIER" \
+ *     --anio 2021 --cp 1425 --sexo M --estadocivil 2 --nacimiento 1990-01-15 --sin-guardar
  */
-import { cotizar } from "./index.js";
+import { config } from "./config.js";
 import { logger } from "./logger.js";
-import type { CotizacionInput } from "./quote/types.js";
+import { SessionManager } from "./session/sessionManager.js";
+import { SessionStore } from "./session/sessionStore.js";
+import { HttpFormAuthStrategy } from "./session/authStrategies.js";
+import { AbsaHttpVehicleCatalogResolver } from "./quote/absaCatalogClient.js";
+import type { VehiculoInput } from "./quote/types.js";
 
-const REFERENCE_INPUT: CotizacionInput = {
-  ramo: "automotor",
-  asegurado: {
-    nombre: "Smoke",
-    apellido: "Test",
-    documentoTipo: "DNI",
-    documentoNumero: "00000000",
-    provincia: "Buenos Aires",
-  },
-  objetoAsegurado: {
-    tipo: "vehiculo",
-    vehiculo: {
-      marca: "PLACEHOLDER",
-      modelo: "PLACEHOLDER",
-      anio: new Date().getFullYear(),
-      usoTipo: "particular",
-    },
-  },
-  cobertura: {
-    tipo: "terceros completo",
-  },
-  // TODO FASE 0: completar con IDs reales de una cotizacion de referencia
-  // estable (ver docs/absa-endpoints.md seccion 7 -- el catalogo de
-  // vehiculos y la creacion de id_Entity todavia no estan descubiertos).
-  absa: {
-    idEntity: 0,
-    idVehiculo: 0,
-    idMarcaVehiculo: 0,
-    idModeloVehiculo: 0,
-    idOrigenVehiculo: 1,
-    infoAuto: 0,
-    idLocalidad: 0,
-  },
+/**
+ * Vehiculo de referencia: tiene que existir en el catalogo de ABSA y matchear
+ * con parecido alto. Si un dia deja de encontrarse, o es que ABSA cambio el
+ * catalogo/el endpoint, o que el matcher se rompio — en los dos casos hay que
+ * mirarlo.
+ */
+const VEHICULO_DE_REFERENCIA: VehiculoInput = {
+  marca: "CHEVROLET",
+  modelo: "TRACKER",
+  version: "1.2T AT PREMIER",
+  anio: 2021,
 };
 
+/** Debajo de esto, el matcher no esta encontrando lo que deberia. */
+const SIMILITUD_MINIMA = 80;
+
 async function main() {
-  const start = Date.now();
-  try {
-    const result = await cotizar(REFERENCE_INPUT);
-    const ms = Date.now() - start;
-    logger.info({ ms, numeroCotizacion: result.numeroCotizacion }, "SMOKE TEST OK: cotizacion de referencia exitosa");
-    process.exit(0);
-  } catch (err) {
-    const ms = Date.now() - start;
-    logger.error({ err, ms }, "SMOKE TEST FALLO: revisar si ABSA net cambio algo o la sesion no se pudo obtener");
-    process.exit(1);
+  const inicio = Date.now();
+  const sessionManager = new SessionManager({
+    credentials: { user: config.ABSA_USER, password: config.ABSA_PASSWORD },
+    authStrategy: new HttpFormAuthStrategy(),
+    store: new SessionStore(config.ABSA_SESSION_STORE_PATH),
+  });
+  const resolver = new AbsaHttpVehicleCatalogResolver(sessionManager);
+
+  // Se fuerza un login nuevo: reusar la sesion persistida haria que el canario
+  // pase aunque las credenciales esten mal, que es justo lo que queremos
+  // detectar.
+  await sessionManager.invalidateAndRelogin();
+
+  const candidatos = await resolver.listarVersiones(VEHICULO_DE_REFERENCIA);
+  if (candidatos.length === 0) {
+    throw new Error(
+      `El catalogo de ABSA no devolvio ninguna version para "${VEHICULO_DE_REFERENCIA.marca} ${VEHICULO_DE_REFERENCIA.modelo}".`,
+    );
   }
+
+  const mejor = candidatos[0]!;
+  if (mejor.similitud < SIMILITUD_MINIMA) {
+    throw new Error(
+      `La mejor coincidencia quedo en ${mejor.similitud}% (minimo ${SIMILITUD_MINIMA}%): "${mejor.text.trim()}". ` +
+        "Puede haber cambiado el catalogo de ABSA o el matcher de versiones.",
+    );
+  }
+
+  const anios = await resolver.aniosDisponibles(mejor.value);
+  if (!anios.includes(String(VEHICULO_DE_REFERENCIA.anio))) {
+    throw new Error(
+      `"${mejor.text.trim()}" (infoAuto ${mejor.value}) ya no cotiza para ${VEHICULO_DE_REFERENCIA.anio}. ` +
+        `Anios disponibles: ${anios.slice(0, 8).join(", ")}.`,
+    );
+  }
+
+  logger.info(
+    {
+      ms: Date.now() - inicio,
+      candidatos: candidatos.length,
+      elegido: mejor.text.trim(),
+      similitud: mejor.similitud,
+      infoAuto: mejor.value,
+    },
+    "SMOKE TEST OK: login, catalogo y matcher de versiones responden",
+  );
+  console.log(`OK — ${mejor.text.trim()} (${mejor.similitud}%) en ${((Date.now() - inicio) / 1000).toFixed(1)}s`);
 }
 
-main();
+main().catch((err) => {
+  logger.error({ err }, "SMOKE TEST FALLIDO: revisar la integracion con ABSA net");
+  console.error(`FALLO: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});

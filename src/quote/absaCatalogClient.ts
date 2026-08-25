@@ -1,4 +1,4 @@
-import got from "got";
+import { httpAbsa } from "../session/httpAbsa.js";
 import type { CookieJar } from "tough-cookie";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
@@ -73,14 +73,25 @@ function otrasVersiones(ranking: CandidatoPuntuado[], infoAutoElegido: string) {
 }
 
 /**
- * ABSA net NO devuelve 401/403 cuando la sesion vence: responde 200 con el
- * HTML de la pagina de login, incluso en endpoints que normalmente devuelven
- * JSON. Confirmado en produccion el 2026-08-20 (ver docs/absa-endpoints.md
- * seccion 5). Sin este chequeo el sintoma era un "Unexpected token '<' ... is
- * not valid JSON" que se reportaba como "vehiculo no encontrado" -- un error
- * terminal y enganioso para algo que se arregla solo relogueando.
+ * ABSA net NO devuelve 401/403 cuando la sesion vence: responde 200 y hay que
+ * mirar el cuerpo. Son dos sintomas distintos, los dos confirmados en
+ * produccion (ver docs/absa-endpoints.md seccion 5):
+ *
+ * - **200 con el HTML del login** en endpoints que devuelven JSON (2026-08-20).
+ *   Sin este chequeo el sintoma era un "Unexpected token '<' ... is not valid
+ *   JSON" reportado como "vehiculo no encontrado" -- un error terminal y
+ *   enganioso para algo que se arregla solo relogueando.
+ * - **200 con el cuerpo VACIO** (2026-08-25). Con una sesion vieja, todos los
+ *   endpoints JSON (`/Combo/*`, `/Data/*`) contestan 200 sin un byte y sin
+ *   content-type; despues de reloguear, los mismos devuelven su JSON. Sin
+ *   este chequeo, el sintoma es "Unexpected end of JSON input".
  */
-function assertNoEsPaginaDeLogin(body: string, contentType: string | undefined, path: string): void {
+export function assertNoEsPaginaDeLogin(body: string, contentType: string | undefined, path: string): void {
+  if (body.trim() === "") {
+    throw new SessionExpiredError(
+      `${path} devolvio 200 con el cuerpo vacio: es como contesta ABSA net cuando la sesion vencio.`,
+    );
+  }
   const esHtml = body.trimStart().startsWith("<") || (contentType ?? "").includes("text/html");
   if (esHtml) {
     throw new SessionExpiredError(
@@ -294,7 +305,7 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
     path: string,
     searchParams: Record<string, string>,
   ): Promise<Array<{ text: string; value: string }>> {
-    const response = await got.get(new URL(path, config.ABSA_BASE_URL), {
+    const response = await httpAbsa.get(new URL(path, config.ABSA_BASE_URL), {
       cookieJar: jar,
       headers,
       searchParams,
@@ -310,7 +321,7 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
   }
 
   private async getVehiculoInfoAuto(jar: CookieJar, headers: Record<string, string>, infoAuto: string) {
-    const response = await got.get(new URL("/Data/GetVehiculoInfoAuto", config.ABSA_BASE_URL), {
+    const response = await httpAbsa.get(new URL("/Data/GetVehiculoInfoAuto", config.ABSA_BASE_URL), {
       cookieJar: jar,
       headers,
       searchParams: { infoAuto },
@@ -357,7 +368,7 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
     anio: number,
   ): Promise<number | undefined> {
     try {
-      const response = await got.get(new URL("/Data/GetVehiculoSumaAsegurada", config.ABSA_BASE_URL), {
+      const response = await httpAbsa.get(new URL("/Data/GetVehiculoSumaAsegurada", config.ABSA_BASE_URL), {
         cookieJar: jar,
         headers,
         searchParams: { infoAuto, anio: String(anio) },
@@ -391,14 +402,14 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
  * redirect, perderiamos el header Location, que es el unico lugar donde viaja
  * el ID.
  */
-async function crearNuevaCotizacion(jar: CookieJar, headers: Record<string, string>): Promise<number> {
+export async function crearNuevaCotizacion(jar: CookieJar, headers: Record<string, string>): Promise<number> {
   const url = new URL("/Cotizador/NuevaCotizacion", config.ABSA_BASE_URL);
   // idRiesgo es OBLIGATORIO: sin el, ABSA no sabe que ramo arrancar y responde
   // 200 con una pagina en vez del 302 con el id_Entity. 9 = Auto (mismo valor
   // que `id_Riesgo` en el payload de cotizacion, ver src/quote/mapper.ts).
   url.searchParams.set("idRiesgo", String(ID_RIESGO_AUTO));
 
-  const response = await got.get(url, {
+  const response = await httpAbsa.get(url, {
     cookieJar: jar,
     // El browser real navega desde el home; se replica el Referer.
     headers: { ...headers, referer: new URL("/Home/Index", config.ABSA_BASE_URL).toString() },

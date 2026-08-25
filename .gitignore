@@ -23,6 +23,11 @@ config/absa-comercial.json
 # mapeo de propiedades custom de HubSpot -- especifico de cada portal (ver README).
 config/hubspot-properties.json
 
+# mapeo de los productores del formulario a IDs de ABSA (que concesionaria cotiza
+# con que acuerdo comercial) -- info de negocio del broker. Ver README.
+# El patron cubre tambien los borradores de `npm run productores -- --mapear`.
+config/absa-productores*.json
+
 # cola de leads pendientes de cotizar -- contiene PII de leads (nombre, DNI, etc).
 .queue/
 

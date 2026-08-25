@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "dev:api": "tsx watch src/api/server.ts",
     "start:api": "node dist/api/server.js",
     "discovery:capture": "tsx discovery/capture-har.ts",
@@ -17,6 +17,7 @@
     "discovery:comercial": "tsx discovery/extract-comercial.ts",
     "cotizar": "tsx src/cotizar-cli.ts",
     "versiones": "tsx src/versiones-cli.ts",
+    "productores": "tsx src/productores-cli.ts",
     "smoke-test": "tsx src/smoke-test.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -27,8 +28,10 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "got": "^14.4.2",
+    "https-proxy-agent": "^9.1.0",
     "pdfkit": "^0.15.2",
     "pino": "^9.3.2",
+    "socks-proxy-agent": "^10.1.0",
     "tough-cookie": "^4.1.4",
     "zod": "^3.23.8"
   },

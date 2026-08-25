@@ -14,6 +14,19 @@ const envSchema = z.object({
   ABSA_MAX_RETRIES: z.coerce.number().int().nonnegative().default(1),
   ABSA_COMERCIAL_TEMPLATE_PATH: z.string().default("config/absa-comercial.json"),
   /**
+   * Mapeo entre la lista cerrada de productores del formulario y los IDs de
+   * ABSA (formato en el README, seccion "Archivos de config"). Opcional: sin
+   * este archivo todo cotiza con el productor de la plantilla comercial.
+   */
+  ABSA_PRODUCTORES_PATH: z.string().default("config/absa-productores.json"),
+  /**
+   * Cuanto se cachea la config comercial que ABSA devuelve por productor
+   * (rebajas, aseguradoras habilitadas, comision). Son tres requests por
+   * productor y cambia muy de vez en cuando — el default de 6h evita pagarlas
+   * en cada lead sin quedarse pegado a una config vieja por dias.
+   */
+  ABSA_CONFIG_COMERCIAL_TTL_MS: z.coerce.number().int().nonnegative().default(6 * 60 * 60 * 1000),
+  /**
    * Aseguradoras a NO cotizar, separadas por coma (por nombre o por id, ej.
    * "SANCOR" o "21"). Se filtran de la plantilla comercial al cargarla.
    *
@@ -22,6 +35,15 @@ const envSchema = z.object({
    * escrita ahi se pierde en la proxima extraccion.
    */
   ABSA_ASEGURADORAS_EXCLUIDAS: z.string().default(""),
+  /**
+   * Proxy por el que sale TODO el trafico hacia ABSA net. Vacio = conexion
+   * directa (el default).
+   *
+   * ABSA filtra por lista blanca de IPs: si el servidor no esta habilitado,
+   * esto permite salir por una que si lo este (ej. `socks5://127.0.0.1:1080`
+   * apuntando a un tunel SSH contra la oficina). Ver docs/deploy.md.
+   */
+  ABSA_PROXY_URL: z.string().default(""),
 
   // --- Integracion HubSpot (Fase 6, ver docs/hubspot-integration.md) ---
   /** Token de la Private App de HubSpot (scopes: crm.objects.deals.*, crm.objects.contacts.read, crm.schemas.deals.read). Vacio = integracion HubSpot deshabilitada. */

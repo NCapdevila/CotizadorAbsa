@@ -1,10 +1,11 @@
 import { CookieJar } from "tough-cookie";
-import got from "got";
+import { httpAbsa } from "./httpAbsa.js";
 import { chromium } from "playwright";
 import type { AbsaCredentials, AuthStrategy, SessionArtifact } from "./types.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { extractRequestVerificationToken } from "./csrf.js";
+import { HEADERS_NAVEGACION, HEADERS_NAVEGADOR } from "./headers.js";
 
 /**
  * ============================================================================
@@ -34,18 +35,37 @@ export class HttpFormAuthStrategy implements AuthStrategy {
     const jar = new CookieJar();
 
     // 1) GET la home (= pagina de login si no hay sesion) para sacar el token anti-forgery.
-    const loginPageResponse = await got.get(config.ABSA_BASE_URL, {
+    const loginPageResponse = await httpAbsa.get(config.ABSA_BASE_URL, {
       cookieJar: jar,
+      headers: HEADERS_NAVEGACION,
       throwHttpErrors: false,
     });
+    // ABSA net tiene lista blanca de IPs: desde una IP no habilitada corta con
+    // 403 en la primera request, antes de ver usuario y contraseña. Confirmado
+    // el 2026-08-24 al desplegar en un VPS — la misma cuenta y el mismo codigo
+    // funcionaban desde la oficina y daban 403 desde el datacenter, con
+    // headers de navegador incluidos. No se arregla del lado del cliente.
+    if (loginPageResponse.statusCode === 403) {
+      throw new Error(
+        "ABSA net respondio 403 al pedir la pagina de login: la IP de este servidor no esta habilitada. " +
+          "ABSA filtra por lista blanca de IPs -- hay que pedirles que agreguen la IP publica de esta maquina " +
+          "(se saca con `curl -s ifconfig.me`). No es un problema de credenciales ni de headers.",
+      );
+    }
     if (loginPageResponse.statusCode >= 400) {
       throw new Error(`GET a la pagina de login fallo con status ${loginPageResponse.statusCode}`);
     }
     const csrfToken = extractRequestVerificationToken(loginPageResponse.body);
 
     // 2) POST el form de login.
-    const response = await got.post(config.ABSA_BASE_URL, {
+    const response = await httpAbsa.post(config.ABSA_BASE_URL, {
       cookieJar: jar,
+      headers: {
+        ...HEADERS_NAVEGACION,
+        origin: config.ABSA_BASE_URL,
+        referer: config.ABSA_BASE_URL,
+        "sec-fetch-site": "same-origin",
+      },
       form: {
         __RequestVerificationToken: csrfToken,
         [LOGIN_FIELDS.user]: credentials.user,
@@ -78,7 +98,9 @@ export class HttpFormAuthStrategy implements AuthStrategy {
     return {
       cookieJarJson: jar.toJSON(),
       sessionToken: null, // no se observo token de sesion fuera de cookies
-      extraHeaders: {},
+      // Se propagan a todas las requests siguientes (ver src/session/headers.ts):
+      // sin esto, el resto del flujo saldria con el user-agent de got.
+      extraHeaders: { ...HEADERS_NAVEGADOR },
       createdAt: Date.now(),
       // TODO FASE 0: no se determino la duracion real de la sesion (docs/absa-endpoints.md seccion 5).
       estimatedExpiresAt: null,
@@ -140,7 +162,9 @@ export class PlaywrightAuthStrategy implements AuthStrategy {
       return {
         cookieJarJson: jar.toJSON(),
         sessionToken: null,
-        extraHeaders: {},
+        // Idem la estrategia HTTP: las requests siguientes salen con got, no
+        // con el browser, asi que necesitan los headers igual.
+        extraHeaders: { ...HEADERS_NAVEGADOR },
         createdAt: Date.now(),
         estimatedExpiresAt: null,
       };

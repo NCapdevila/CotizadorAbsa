@@ -78,6 +78,19 @@ export interface CotizacionInput {
   cobertura: CoberturaInput;
 
   /**
+   * Productor (concesionaria/vendedor) con cuyo acuerdo comercial se cotiza.
+   *
+   * Es el valor de la lista CERRADA del formulario, no texto libre: se traduce
+   * al `Comercial.id_Productor` de ABSA con el mapeo de
+   * config/absa-productores.json (ver ./productoresConfig.ts). Cambiarlo
+   * cambia rebajas, comision y que aseguradoras cotizan.
+   *
+   * Sin esto se cotiza con el productor de config/absa-comercial.json, que es
+   * como venia funcionando.
+   */
+  productor?: string;
+
+  /**
    * ABSA net identifica el vehiculo por IDs de un catalogo interno
    * (Infoauto + catalogo propio de ABSA), no por marca/modelo en texto
    * libre. `AbsaEntityResolver` (ver ./vehicleCatalog.ts y

@@ -102,7 +102,10 @@ npm install
 | `ABSA_MIN_REQUEST_INTERVAL_MS` | no | `1500` | Piso de tiempo entre requests salientes a ABSA (rate limit conservador) |
 | `ABSA_MAX_RETRIES` | no | `1` | Reintentos ante error transitorio |
 | `ABSA_COMERCIAL_TEMPLATE_PATH` | no | `config/absa-comercial.json` | Config comercial de cuenta (rebajas/comisiones por aseguradora), ver sección abajo |
+| `ABSA_PRODUCTORES_PATH` | no | `config/absa-productores.json` | Mapeo de la lista de productores del formulario a IDs de ABSA, ver sección abajo. Si no existe, todo cotiza con el productor de la plantilla comercial |
+| `ABSA_CONFIG_COMERCIAL_TTL_MS` | no | `21600000` (6h) | Cuánto se cachea la config comercial que ABSA devuelve por productor (son 3 requests por productor) |
 | `ABSA_ASEGURADORAS_EXCLUIDAS` | no | *(vacío)* | Aseguradoras a NO cotizar, por nombre o id, separadas por coma (ej. `SANCOR`) |
+| `ABSA_PROXY_URL` | no | *(vacío)* | Proxy por el que sale el tráfico a ABSA (ej. `socks5://127.0.0.1:1080`), para cuando la IP del servidor no está habilitada. Vacío = directo. Ver `docs/deploy.md` |
 | `HUBSPOT_ACCESS_TOKEN` | no | *(vacío)* | Token de la Private App. **Vacío = integración HubSpot apagada** (no se monta el webhook) |
 | `HUBSPOT_WEBHOOK_SECRET` | no | *(vacío)* | Secreto compartido que valida el header `x-webhook-secret` del webhook |
 | `HUBSPOT_API_BASE_URL` | no | `https://api.hubapi.com` | Base URL de la API de HubSpot |
@@ -130,6 +133,28 @@ desde una máquina que ya los tenga, o regenerarlos:
   "camposPorAseguradora": { "Poliza.id_TipoPolizaZurich": 3, "Comercial.RebajaZurich": 30 }
 }
 ```
+
+**`config/absa-productores.json`** — mapea cada opción de la lista (cerrada) de
+productores del formulario a su `id_Productor` real de ABSA. Se genera de una
+con `npm run productores -- --mapear <lista>` y se chequea contra ABSA con
+`npm run productores -- --verificar`. Es **opcional**: sin él, todo cotiza con
+el productor de `config/absa-comercial.json`. Forma:
+
+```json
+{
+  "defecto": "ardama",
+  "productores": {
+    "ardama": {
+      "idProductor": 6856,
+      "nombre": "ARDAMA 2020 S.A.",
+      "idConfiguracion": 3345,
+      "alias": ["ARDAMA 2020 S.A."]
+    }
+  }
+}
+```
+
+Ver "Cotizar con el productor del formulario" más abajo para qué es cada campo.
 
 **`config/hubspot-properties.json`** — a mano, con los nombres internos de las
 propiedades custom que creaste en tu portal. **Lo que no esté acá no se
@@ -198,7 +223,7 @@ El agente de Ninjo solo ve `CotizacionInput` / `CotizacionResult`
 
 ```bash
 npm run dev:api     # local, recarga al tocar codigo
-npm run build && npm run start:api   # produccion
+npm run build && npm run start:api   # produccion (compila src -> dist/api/server.js)
 ```
 
 Expone dos rutas y nada mas:
@@ -222,12 +247,14 @@ npm run cotizar -- --marca CHEVROLET --modelo TRACKER --version "1.2 TURBO AT PR
   --anio 2021 --cp 1425 --sexo M --estadocivil 2 --nacimiento 1990-01-15
 ```
 
-Le pega a ABSA net **real** y deja la cotización guardada en la cuenta
-(`--sin-guardar` para que quede solo el JSON/PDF local en `salida/`).
+Le pega a ABSA net **real** y deja la cotización guardada en la cuenta, que es
+lo que después permite abrirla desde el listado (`--sin-guardar` para no
+guardarla). Al terminar imprime los premios agrupados por aseguradora y el link
+para abrir la cotización en ABSA. No escribe archivos.
 
 ABSA exige **sexo, estado civil y fecha de nacimiento** (los valida del lado
 del servidor). El **documento no**: `--dni` es opcional y solo sirve para que
-la cotización quede identificada en el listado de ABSA y en el PDF.
+la cotización quede identificada en el listado de ABSA.
 
 ### Elegir la versión correcta
 
@@ -263,6 +290,136 @@ búsqueda. Sin `--version` no hay con qué elegir: se toma la primera del
 catálogo y se avisa (puede no ser la del cliente). Lo mismo aplica al
 pipeline de HubSpot, que usa la propiedad `version_vehiculo` del formulario.
 
+## Cotizar con el productor del formulario
+
+Cada cotización se hace **con el acuerdo comercial de un productor** (la
+concesionaria o el vendedor): eso define las rebajas, la comisión y qué
+aseguradoras cotizan. Antes había uno solo y fijo, el de
+`config/absa-comercial.json` (ARDAMA). Ahora el formulario puede mandar cuál.
+
+### Cómo funciona
+
+El formulario manda su valor (`productor` en el payload del webhook, o
+`--productor` en el CLI) y el backend lo traduce a un `id_Productor` de ABSA
+con `config/absa-productores.json`. **La traducción es un mapeo a mano y el
+match es exacto**, a propósito: elegir "el más parecido" cuando las dos listas
+no coinciden es como se termina cotizando con el acuerdo comercial del de al
+lado, sin ningún síntoma visible.
+
+**Lo que no está mapeado cotiza con el productor `defecto` (hoy ARDAMA)**, no
+falla. Vale también si el formulario no manda el campo. Es una decisión de
+negocio: entre no atender el lead y cotizarlo con la cuenta general, se prefiere
+lo segundo — la cotización queda igual guardada en ABSA para que la levante un
+vendedor. En el log queda un `warn` con el valor que no matcheó y los parecidos
+del mapeo, que es lo que hace falta para completarlo después.
+
+Con el productor resuelto, se le pide a ABSA la config comercial de **ese**
+productor —las mismas tres llamadas que hace el portal cuando alguien cambia el
+combo, ver `docs/absa-endpoints.md` sección 3.3— y de ahí sale lo que **sí**
+cambia por productor: la configuración/tarifa (`id_Configuracion`), la comisión
+y qué aseguradoras tiene habilitadas. Se cachea 6h por productor
+(`ABSA_CONFIG_COMERCIAL_TTL_MS`).
+
+Las **condiciones comerciales** (rebajas, cláusulas de ajuste, tipo de póliza,
+planes) NO salen de ahí: son las mismas para todos los productores del broker y
+se toman de `config/absa-comercial.json`. Ver "Las rebajas" abajo.
+
+Un atajo que evita trabajo: si el productor resuelto es el mismo de
+`config/absa-comercial.json` (hoy ARDAMA), se usa el archivo tal cual y no se le
+pide nada a ABSA. Es el caso de todo lead sin productor o con uno sin mapear.
+
+### Armar el mapeo
+
+```bash
+npm run productores -- --mapear lista.txt    # mapea TODA la lista del formulario de una
+npm run productores -- --buscar "xango"      # busca uno solo
+npm run productores -- --id 9767             # que ofrece ese productor
+npm run productores -- --id 9767 --campos    # + los 44 campos comerciales y sus opciones
+npm run productores -- --verificar           # chequea TODO el mapeo contra ABSA
+```
+
+**`--mapear`** es el camino para cargar la lista entera. Come dos formatos:
+
+- **Texto**: un nombre por línea (se ignoran las vacías y las que arrancan con `#`).
+- **JSON exportado de la planilla**: array de strings, o de objetos
+  (`{"Productores": "...", "Activos": "SI"}`), incluso sin los corchetes de
+  afuera, que es como los deja Google Sheets. Las filas marcadas como inactivas
+  se saltean, y el mojibake típico de un export mal codificado
+  (`BurgueÃ±O` → `BURGUEÑO`) se arregla al leer.
+
+Escribe un borrador en `config/absa-productores.draft.json`. También acepta la
+lista escrita a mano: `--nombres "Xango Autos, Abasto Motors"`.
+
+```
+  ESTADO  OPCION DEL FORMULARIO                  ID       PRODUCTOR EN ABSA
+  YA     Ardama                                 6856     ARDAMA 2020 S.A.
+  OK     Xango Autos                            9767     XANGO AUTOS, CONCESIONARIA (100%)
+  OK     Woscoff Gabriel                        7616     WOSCOFF, GABRIEL (100%)
+  FALTA  Concesionaria Que No Existe SRL        -        (nada parecido)
+```
+
+- `OK` (100%) se mapea solo; `MIRAR` se mapea pero hay que confirmarlo.
+- `YA` = ya estaba en el mapeo: se copia tal cual, con los ajustes que le hayas
+  hecho a mano.
+- `FALTA` = **no se mapea**. Queda en `_pendientes` con los candidatos, para
+  resolverlo a ojo. Debajo del 70% de parecido, o con empate entre dos
+  candidatos, no se elige solo: un id equivocado no falla, cotiza con el
+  acuerdo de otro.
+
+`_comentario` y `_pendientes` los ignora el loader, así que el borrador se puede
+renombrar a `config/absa-productores.json` y usar aunque queden pendientes.
+
+Todos los modos son de **solo lectura**: no cotizan ni guardan nada.
+
+**Una excepción, con `--mapear` y `--buscar`:** la lista completa de productores
+sale del combo de la página del cotizador (1036 en esta cuenta), y abrir esa
+página sin más **crea una cotización vacía** en la cuenta. Para evitarlo, pasar
+el número de una cotización que ya exista:
+
+```bash
+npm run productores -- --mapear lista.txt --cotizacion 41322632
+```
+
+El combo se cachea 24h en `.session/`, así que en el peor caso pasa una vez por
+día. Y no alcanza con la búsqueda incremental de ABSA: **se saltea productores
+que existen** (`woscoff`, `ballesteros` y `yimi` no devuelven nada aunque están
+en el combo). Se usa solo como respaldo.
+
+### Las rebajas
+
+`ObtenerConfigCotizador` devuelve los **defaults del formulario**, no lo que el
+productor elige en la pantalla: las rebajas vienen en `0` junto con la lista de
+las que ese acuerdo permite. Cotizar con el default es legítimo pero da primas
+más caras que cotizando a mano.
+
+Como el acuerdo comercial del broker es **uno solo para todos los productores**,
+las condiciones salen de `config/absa-comercial.json` (los ~45 campos
+`Comercial.*` / `Poliza.*` / `Item.RebajasComerciales[*]`, con las rebajas que
+el negocio eligió a mano) y se aplican igual para cualquier productor. Verificado
+sobre el terreno: los productores que miramos ofrecen exactamente las mismas
+opciones de rebaja que ARDAMA.
+
+Si alguna concesionaria alguna vez necesita condiciones distintas, la entrada
+del mapeo acepta `campos`, que se pisan encima:
+
+```json
+"xango autos, concesionaria": {
+  "idProductor": 9767,
+  "nombre": "XANGO AUTOS, CONCESIONARIA",
+  "campos": { "Comercial.RebajaZurich": 25 }
+}
+```
+
+`npm run productores -- --id <id>` lista qué rebajas tiene ese productor y qué
+valores acepta cada una. Un valor que ABSA no ofrece se manda igual (ABSA es la
+autoridad final) pero queda avisado en el log y en `--verificar`.
+
+El resto de la entrada, todo opcional: `idConfiguracion` o `configuracion` (solo
+hacen falta si el productor tiene más de una tarifa; con una sola ABSA la elige
+sola), `comision` (default: la que ABSA proponga), `alias` (otras formas en las
+que el formulario puede escribir lo mismo) y `defecto` a nivel archivo (con qué
+productor cotizar lo que no esté mapeado).
+
 ## Dejar de cotizar una aseguradora
 
 ```bash
@@ -282,6 +439,12 @@ se regenera con `npm run discovery:comercial` y la exclusión se perdería.
 Tiempos medidos sobre dos capturas reales, por si hay que decidir a quién
 sacar: SANCOR tarda **40-55s**, contra 5-17s de todas las demás — es ~30% del
 tiempo total de una cotización.
+
+## Deploy
+
+Paso a paso para el VPS en [`docs/deploy.md`](docs/deploy.md): clonar, build,
+`.env`, los dos JSON de config, pm2 y cómo verificar que el webhook quedó
+realmente montado.
 
 ## Tests
 
@@ -339,9 +502,10 @@ Checklist, no resuelto por este repo — requiere decisión humana:
 - [ ] Revisar que `ABSA_MIN_REQUEST_INTERVAL_MS` sea conservador para el
       volumen esperado — evitar generar carga anómala o activar
       protecciones anti-bot de ABSA.
-- [ ] `.env`, `config/absa-comercial.json`, `config/hubspot-properties.json`
+- [ ] `.env`, `config/absa-comercial.json`, `config/absa-productores.json`,
+      `config/hubspot-properties.json`
       y todo lo bajo `discovery/output/`, `.session/` y `.queue/` **nunca**
-      se commitean (ya están en `.gitignore` desde el primer commit) ni se
+      se commitean (ya están en `.gitignore`) ni se
       comparten fuera del equipo que administra las credenciales — `.queue/`
       en particular tiene PII de leads (nombre, DNI) mientras esperan a ser
       cotizados.
@@ -365,10 +529,12 @@ absa-cotizador/
     logger.ts             # pino con redacción de secretos
     index.ts              # export público: cotizar() + tipos
     session/               # Fase 1
-    quote/                  # Fase 2 (incluye vehicleCatalog.ts, el gap de la Fase 0)
+    quote/                  # Fase 2 (incluye vehicleCatalog.ts, el gap de la Fase 0,
+                            #   y la config comercial por productor: absaComercialClient.ts)
     api/                     # servidor HTTP: /health + webhook de HubSpot
     integrations/hubspot/     # Fase 6: cliente HubSpot, mapper, auth del webhook
     queue/                     # Fase 6: cola persistida en archivo + worker asíncrono
+    productores-cli.ts       # busca productores en ABSA y verifica el mapeo del formulario
     smoke-test.ts            # Fase 4
   tests/                # HTTP mockeado con nock, no pegan a ABSA ni HubSpot reales
 ```

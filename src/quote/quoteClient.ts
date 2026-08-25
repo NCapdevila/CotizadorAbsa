@@ -1,4 +1,5 @@
-import got, { HTTPError, RequestError } from "got";
+import { HTTPError, RequestError } from "got";
+import { httpAbsa } from "../session/httpAbsa.js";
 import type { CookieJar } from "tough-cookie";
 import { SessionManager } from "../session/sessionManager.js";
 import { extractRequestVerificationToken } from "../session/csrf.js";
@@ -6,7 +7,9 @@ import { config } from "../config.js";
 import { logger } from "../logger.js";
 import type { CotizacionInput, CotizacionOpcion, CotizacionResult } from "./types.js";
 import { toAbsaCotizarPayload, toAbsaPropuestaPayload, parseCotizacionPropuestaHtml, tryParseAbsaErrorJson, tryParseAbsaErrores, assertDatosAseguradoCompletos } from "./mapper.js";
-import { loadComercialTemplate } from "./absaTemplate.js";
+import { loadComercialTemplate, type AbsaComercialTemplate } from "./absaTemplate.js";
+import { AbsaComercialConfigClient } from "./absaComercialClient.js";
+import { resolverProductor } from "./productoresConfig.js";
 import { BusinessValidationError, SessionExpiredError, TransientError, UpstreamChangedError } from "./errors.js";
 
 /**
@@ -149,10 +152,47 @@ export class QuoteClient {
   private readonly errorRateAlertThreshold = 0.5;
   private readonly errorRateMinSample = 5;
 
-  constructor(private readonly sessionManager: SessionManager) {}
+  constructor(
+    private readonly sessionManager: SessionManager,
+    /** Config comercial en vivo por productor. Inyectable para tests; por default habla con ABSA. */
+    private readonly comercialClient: AbsaComercialConfigClient = new AbsaComercialConfigClient(sessionManager),
+  ) {}
 
   async cotizar(input: CotizacionInput): Promise<CotizacionResult> {
     return this.attempt(input, { alreadyRelogged: false, retriesLeft: config.ABSA_MAX_RETRIES });
+  }
+
+  /**
+   * Con que acuerdo comercial se cotiza este lead. Publico porque el CLI lo
+   * muestra antes de cotizar: con que productor y contra que aseguradoras.
+   *
+   * El productor no es un dato mas del formulario: define rebajas, comisiones
+   * y que aseguradoras cotizan. Por eso hay dos caminos y ninguno adivina:
+   *
+   * - Sin productor en el lead (o si es el mismo de la plantilla de archivo):
+   *   se usa `config/absa-comercial.json` tal cual. Es el camino historico y
+   *   no gasta ninguna request. La plantilla ademas tiene las rebajas que el
+   *   negocio eligio a mano para ESE productor, que ABSA no devuelve por API
+   *   (`ObtenerConfigCotizador` da los defaults del formulario, con las
+   *   rebajas en 0).
+   * - Con otro productor: se pide la config a ABSA en vivo y se le aplican
+   *   los overrides del mapeo (ver ./absaComercialClient.ts).
+   */
+  async templateComercialPara(input: CotizacionInput): Promise<AbsaComercialTemplate> {
+    const base = loadComercialTemplate();
+    const entrada = resolverProductor(input.productor);
+
+    if (!entrada || entrada.idProductor === base.idProductor) {
+      if (input.productor) {
+        logger.info(
+          { productor: input.productor, idProductor: base.idProductor },
+          "El productor del lead es el de la plantilla comercial: se cotiza con el archivo, sin pedir config a ABSA",
+        );
+      }
+      return base;
+    }
+
+    return this.comercialClient.resolverTemplate(entrada, base);
   }
 
   private async attempt(
@@ -169,7 +209,7 @@ export class QuoteClient {
     // pedir el token ni crear una entidad de cotizacion que quedaria huerfana.
     assertDatosAseguradoCompletos(input);
 
-    const template = loadComercialTemplate();
+    const template = await this.templateComercialPara(input);
     const session = await this.sessionManager.getSession();
     const jar = SessionManager.jarFromArtifact(session);
     const idEntity = input.absa.idEntity;
@@ -179,7 +219,7 @@ export class QuoteClient {
       this.rateTracker.attempts++;
 
       // 1) GET la pagina para sacar el token anti-forgery vigente.
-      const pageResponse = await got.get(new URL(COTIZADOR_PAGE_PATH(idEntity), config.ABSA_BASE_URL), {
+      const pageResponse = await httpAbsa.get(new URL(COTIZADOR_PAGE_PATH(idEntity), config.ABSA_BASE_URL), {
         cookieJar: jar,
         headers: session.extraHeaders,
         throwHttpErrors: false,
@@ -192,7 +232,7 @@ export class QuoteClient {
       // 2) POST el form principal.
       await this.enforceRateLimit();
       const payload = toAbsaCotizarPayload(input, template, csrfToken);
-      const cotizarResponse = await got.post(
+      const cotizarResponse = await httpAbsa.post(
         new URL(COTIZAR_PATH(idEntity), config.ABSA_BASE_URL),
         {
           cookieJar: jar,
@@ -231,7 +271,7 @@ export class QuoteClient {
 
         let propuestaResponse;
         try {
-          propuestaResponse = await got.post(new URL(PROPUESTA_PATH, config.ABSA_BASE_URL), {
+          propuestaResponse = await httpAbsa.post(new URL(PROPUESTA_PATH, config.ABSA_BASE_URL), {
             cookieJar: jar,
             body: propuestaPayload.toString(),
             headers: {
@@ -355,7 +395,7 @@ export class QuoteClient {
     const formUrl = new URL(GUARDAR_PATH, config.ABSA_BASE_URL);
     formUrl.searchParams.set("nroCotizacion", nroCotizacion);
     formUrl.searchParams.set("_", String(Date.now()));
-    const formResponse = await got.get(formUrl, {
+    const formResponse = await httpAbsa.get(formUrl, {
       cookieJar: jar,
       headers: { ...session.extraHeaders, "x-requested-with": "XMLHttpRequest", referer },
       throwHttpErrors: false,
@@ -377,7 +417,7 @@ export class QuoteClient {
       NroCotizacion: nroCotizacion,
       Descripcion: descripcion,
     });
-    const saveResponse = await got.post(new URL(GUARDAR_PATH, config.ABSA_BASE_URL), {
+    const saveResponse = await httpAbsa.post(new URL(GUARDAR_PATH, config.ABSA_BASE_URL), {
       cookieJar: jar,
       body: body.toString(),
       headers: {
@@ -458,7 +498,7 @@ export class QuoteClient {
     formUrl.searchParams.set("ocultarComision", ocultarComision ? "True" : "False");
     formUrl.searchParams.set("nroCotizacion", nroCotizacion);
     formUrl.searchParams.set("_", String(Date.now()));
-    const formResponse = await got.get(formUrl, {
+    const formResponse = await httpAbsa.get(formUrl, {
       cookieJar: jar,
       headers: { ...session.extraHeaders, "x-requested-with": "XMLHttpRequest", referer },
       throwHttpErrors: false,
@@ -495,7 +535,7 @@ export class QuoteClient {
     ]);
 
     await this.enforceRateLimit();
-    const pdfResponse = await got.post(new URL(EXPORTAR_PDF_PATH, config.ABSA_BASE_URL), {
+    const pdfResponse = await httpAbsa.post(new URL(EXPORTAR_PDF_PATH, config.ABSA_BASE_URL), {
       cookieJar: jar,
       body: body.toString(),
       headers: {
@@ -566,7 +606,7 @@ export class QuoteClient {
         ocultarComision: "False",
       });
       try {
-        const response = await got.post(new URL(PROPUESTAS_CHECK_PATH, config.ABSA_BASE_URL), {
+        const response = await httpAbsa.post(new URL(PROPUESTAS_CHECK_PATH, config.ABSA_BASE_URL), {
           cookieJar: jar,
           body: body.toString(),
           headers: {

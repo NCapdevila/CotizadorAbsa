@@ -6,7 +6,7 @@
  *
  *   login -> GET /Cotizador/NuevaCotizacion (id_Entity) -> resolucion del
  *   vehiculo contra el catalogo real -> POST de cotizacion -> una request por
- *   aseguradora -> resultado normalizado + PDF en disco.
+ *   aseguradora -> resultado en pantalla -> cotizacion guardada en ABSA.
  *
  * OJO: le pega a ABSA net REAL con las credenciales de .env y deja una
  * cotizacion registrada en la cuenta. Usar datos de prueba.
@@ -18,8 +18,6 @@
  * la cotizacion con un 400. El documento NO lo exige (--dni es opcional). Ver
  * USAGE abajo para el resto de las opciones.
  */
-import fs from "node:fs";
-import path from "node:path";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { SessionManager } from "./session/sessionManager.js";
@@ -27,11 +25,12 @@ import { SessionStore } from "./session/sessionStore.js";
 import { HttpFormAuthStrategy } from "./session/authStrategies.js";
 import { QuoteClient } from "./quote/quoteClient.js";
 import { AbsaHttpVehicleCatalogResolver } from "./quote/absaCatalogClient.js";
-import { buildCotizacionPdf } from "./integrations/hubspot/quotePdf.js";
 import type { CotizacionInput } from "./quote/types.js";
 import { parseArgs } from "./cliArgs.js";
-import { loadComercialTemplate } from "./quote/absaTemplate.js";
 import { descripcionCotizacion } from "./quote/mapper.js";
+import { formatearResultado } from "./quote/resultadoConsola.js";
+import { urlDeCotizacionEnAbsa } from "./integrations/hubspot/mapper.js";
+import { buscarProductorMapeado, resolverProductor } from "./quote/productoresConfig.js";
 
 
 const USAGE = `
@@ -65,11 +64,15 @@ Opcionales:
   --nombre --apellido        Datos del asegurado (ABSA no los exige para cotizar)
   --suma <pesos>             Suma asegurada; si se omite se usa la que sugiere ABSA
   --uso <tipo>               particular (default) | comercial | transporte
+  --productor <valor>        Productor/concesionaria con cuyo acuerdo comercial
+                             cotizar, tal cual lo manda el formulario. Se traduce
+                             a un id de ABSA con config/absa-productores.json.
+                             Sin esto se usa el de config/absa-comercial.json.
+                             Las opciones salen de: npm run productores
   --provincia <id>           ID numerico de provincia (default 1, el de la captura)
-  --salida <dir>             Donde dejar el JSON y el PDF (default ./salida)
   --descripcion "<texto>"    Nombre con el que se guarda la cotizacion en ABSA
                              (default: vehiculo - patente - titular - documento)
-  --sin-guardar              Cotiza pero NO guarda en ABSA (queda solo local)
+  --sin-guardar              Cotiza pero NO deja la cotizacion guardada en ABSA
 `;
 
 async function main() {
@@ -131,7 +134,21 @@ async function main() {
       tipo: "todas",
       sumaAsegurada: args["suma"] ? Number(args["suma"]) : undefined,
     },
+    productor: args["productor"],
   };
+
+  // Con que acuerdo comercial se cotiza tiene que verse, no quedar implicito:
+  // un --productor que no esta mapeado NO falla, cotiza con el productor por
+  // defecto, y eso hay que poder notarlo en la salida.
+  const productor = resolverProductor(input.productor);
+  if (productor) {
+    const sinMapear = Boolean(args["productor"]) && !buscarProductorMapeado(args["productor"]!);
+    console.log(
+      `\nProductor: ${args["productor"] ?? "(no se paso --productor)"} -> ${productor.idProductor} ` +
+        `${productor.nombre ?? productor.clave}` +
+        (sinMapear ? `   [OJO: no esta en el mapeo, se usa el productor por defecto]` : ""),
+    );
+  }
 
   const t0 = Date.now();
   console.log(`\nCotizando ${input.objetoAsegurado.vehiculo!.marca} ${input.objetoAsegurado.vehiculo!.modelo} ${anio} (CP ${args["cp"]})`);
@@ -166,57 +183,39 @@ async function main() {
     console.log(`      -> suma asegurada sugerida: ${input.absa.sumaAseguradaSugerida.toLocaleString("es-AR")}`);
   }
 
-  // Se listan a proposito: una exclusion mal configurada
-  // (ABSA_ASEGURADORAS_EXCLUIDAS) no tiene ningun otro sintoma visible que la
-  // compañia que creias sacada apareciendo en el resultado.
-  const aCotizar = loadComercialTemplate().aseguradoras;
-  console.log(`\n[2/3] Cotizando contra ${aCotizar.length} aseguradoras: ${aCotizar.map((a) => a.nombre).join(", ")}`);
+  // Se listan a proposito: ni una exclusion mal configurada
+  // (ABSA_ASEGURADORAS_EXCLUIDAS) ni un productor con otra lista de compañias
+  // habilitadas tienen mas sintoma visible que un resultado distinto al
+  // esperado. Ojo que esto ya resuelve la config comercial del productor
+  // (con --productor le pega a ABSA la primera vez).
+  const template = await quoteClient.templateComercialPara(input);
+  const aCotizar = template.aseguradoras;
+  console.log(
+    `\n[2/3] Cotizando con el productor ${template.idProductor} ` +
+      `(configuracion ${template.idConfiguracion}, comision ${template.comision}%) contra ` +
+      `${aCotizar.length} aseguradoras: ${aCotizar.map((a) => a.nombre).join(", ")}`,
+  );
   const result = await quoteClient.cotizar(input);
 
   console.log(`\n[3/3] Listo en ${((Date.now() - t0) / 1000).toFixed(0)}s`);
-  console.log(`\nNumero de cotizacion ABSA: ${result.numeroCotizacion}`);
-  console.log(`Opciones obtenidas: ${result.opciones.length}\n`);
+  console.log(`\n${formatearResultado(result)}\n`);
 
-  const fmt = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
-  for (const o of [...result.opciones].sort((a, b) => a.premio - b.premio)) {
-    console.log(`   ${fmt.format(o.premio).padStart(14)}   ${o.plan}`);
-  }
-
-  const fallos = (result.rawAbsaResponse as { fallos?: string[] })?.fallos ?? [];
-  if (fallos.length > 0) {
-    console.log(`\nAseguradoras sin cotizacion (${fallos.length}):`);
-    for (const f of fallos) console.log(`   - ${f}`);
-  }
-
-  // El resultado tiene datos del asegurado: mismo trato que .queue/ (gitignored).
-  const outDir = args["salida"] ?? "salida";
-  fs.mkdirSync(outDir, { recursive: true });
-  const base = `cotizacion-${result.numeroCotizacion ?? Date.now()}`;
-  const jsonPath = path.join(outDir, `${base}.json`);
-  const pdfPath = path.join(outDir, `${base}.pdf`);
-
-  fs.writeFileSync(jsonPath, JSON.stringify({ input, result }, null, 2), { mode: 0o600 });
-  fs.writeFileSync(pdfPath, await buildCotizacionPdf(input, result), { mode: 0o600 });
-
-  console.log(`\nGuardado local:`);
-  console.log(`   ${jsonPath}`);
-  console.log(`   ${pdfPath}`);
-
-  // Guardar en ABSA es lo que hace que la cotizacion quede en el listado y se
-  // pueda recuperar despues; sin esto queda solo como una consulta efimera.
+  // Guardar en ABSA es lo que hace que la cotizacion quede en el listado y la
+  // pueda levantar un vendedor; sin esto queda solo como una consulta efimera.
   if (args["sin-guardar"]) {
-    console.log("\n--sin-guardar: NO se guardo en ABSA net (queda solo el archivo local).\n");
+    console.log("--sin-guardar: la cotizacion NO quedo guardada en ABSA net.\n");
     return;
   }
   if (!result.numeroCotizacion) {
-    console.log("\nNo se guardo en ABSA: la cotizacion no devolvio numero.\n");
+    console.log("No se guardo en ABSA: la cotizacion no devolvio numero.\n");
     return;
   }
 
   const descripcion = args["descripcion"] ?? descripcionCotizacion(input);
-  console.log(`\nGuardando en ABSA net como: "${descripcion}"`);
   await quoteClient.guardarCotizacion(input.absa!.idEntity, result.numeroCotizacion, descripcion);
-  console.log(`Cotizacion ${result.numeroCotizacion} guardada en ABSA net bajo tu usuario.\n`);
+  console.log(`Guardada en ABSA net como "${descripcion}"`);
+  console.log(`Para abrirla (con una sesion de ABSA activa):`);
+  console.log(`   ${urlDeCotizacionEnAbsa(result.numeroCotizacion)}\n`);
 }
 
 main().catch((err) => {

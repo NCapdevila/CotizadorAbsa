@@ -1,0 +1,16 @@
+{
+  "_comentario": "Mapeo de prueba. 'ardama' apunta al mismo idProductor que tests/fixtures/absa-comercial.test.json a proposito (camino corto: se cotiza con el archivo); 'xango' apunta a otro (camino largo: config en vivo). Con 'defecto', igual que en produccion: lo que no esta mapeado cotiza con ardama.",
+  "defecto": "ardama",
+  "productores": {
+    "ardama": {
+      "idProductor": 1,
+      "nombre": "ARDAMA 2020 S.A.",
+      "alias": ["ardama 2020"]
+    },
+    "xango": {
+      "idProductor": 9767,
+      "nombre": "XANGO AUTOS, CONCESIONARIA",
+      "campos": { "Comercial.RebajaZurich": 25 }
+    }
+  }
+}

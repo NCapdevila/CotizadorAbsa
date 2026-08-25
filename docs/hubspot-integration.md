@@ -170,7 +170,8 @@ necesitamos el `dealId` que ya existe).
       "modelo_vehiculo": "{{deal.modelo_vehiculo}}",
       "anio_vehiculo": "{{deal.anio_vehiculo}}",
       "uso_vehiculo": "{{deal.uso_vehiculo}}",
-      "cobertura_tipo": "{{deal.cobertura_tipo}}"
+      "cobertura_tipo": "{{deal.cobertura_tipo}}",
+      "productor": "{{deal.productor}}"
     }
     ```
 
@@ -183,11 +184,23 @@ necesitamos el `dealId` que ya existe).
     resolver de catálogo no puede resolver `DomicilioRiesgo.id_Localidad` y
     el Deal va a quedar en `error_catalogo_no_resuelto`.
 
+    **`productor` define con qué productor de ABSA se cotiza** (la
+    configuración/tarifa, la comisión y qué aseguradoras). Es el valor de la
+    lista cerrada del formulario, y se traduce a un id de ABSA con
+    `config/absa-productores.json` (ver el README, sección "Cotizar con el
+    productor del formulario"). **El match es exacto**: si el valor no está
+    mapeado, o si el campo no viene, se cotiza igual con el productor por
+    defecto (hoy ARDAMA) y queda un `warn` en el log — el lead nunca se frena
+    por esto.
+
 ## 2. Del lado de este repo
 
 ```bash
 # crear config/hubspot-properties.json (formato en el README, seccion "Archivos de config")
 # ajustar los nombres si usaste otros distintos a los sugeridos en 1.2
+# si el formulario manda `productor`: crear tambien config/absa-productores.json
+#   npm run productores -- --buscar "<nombre de la concesionaria>"
+#   npm run productores -- --verificar
 ```
 
 Completar en `.env` (lista completa de variables en el README): `HUBSPOT_ACCESS_TOKEN`,
@@ -210,7 +223,7 @@ npm run dev:api   # levanta Express + el LeadWorker en el mismo proceso
 | `ok` | Se cotizó correctamente, ver `absa_opciones_json` y `cotizacion_absa` | — | Solo si `HUBSPOT_ADJUNTAR_PDF=true` |
 | `error_datos_incompletos` | El payload de HubSpot no traía lo mínimo (nombre, apellido, marca/modelo/año, sexo, estado civil, fecha de nacimiento — el DNI **no** es obligatorio: ABSA cotiza sin documento) | No — completar el dato en HubSpot y reprocesar a mano | No |
 | `error_catalogo_no_resuelto` | ABSA no tiene ese vehículo/año, o falta código postal/localidad para resolver el domicilio (ver `docs/absa-endpoints.md` sección 3.1) | No | No |
-| `error_negocio_absa` | ABSA net rechazó la cotización por un motivo de negocio (dato inválido, producto no cotizable) | No | No |
+| `error_negocio_absa` | ABSA net rechazó la cotización por un motivo de negocio (dato inválido, producto no cotizable, configuración comercial que ABSA no acepta para ese productor) | No | No |
 | `error_absa` | Error técnico contra ABSA net (sesión, timeout, cambio de contrato) después de agotar `QUEUE_MAX_ATTEMPTS` reintentos | Ya se reintentó automáticamente antes de llegar a este estado | No |
 
 Un Deal que nunca cambia de estado (no aparece ninguna actualización después

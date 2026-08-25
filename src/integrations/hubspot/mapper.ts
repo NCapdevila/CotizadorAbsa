@@ -133,6 +133,10 @@ export function hubspotPayloadToCotizacionInput(payload: HubspotLeadWebhookPaylo
       tipo: payload.cobertura_tipo ?? "terceros completo",
       sumaAsegurada: toNumber(payload.suma_asegurada),
     },
+    // Lista cerrada del formulario. No se valida aca: la traduccion a un
+    // productor de ABSA la hace resolverProductor() contra el mapeo, y su
+    // error ya dice cual falto agregar. Vacio = productor de la plantilla.
+    productor: payload.productor?.trim() || undefined,
   };
 
   return input;

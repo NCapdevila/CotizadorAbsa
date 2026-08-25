@@ -275,6 +275,33 @@ describe("LeadWorker.runOnce", () => {
     fs.rmSync(filePath, { force: true });
   });
 
+  it("un productor que el formulario manda y no esta mapeado cotiza igual, con el productor por defecto", async () => {
+    const { queue, filePath } = buildQueue();
+    const dealWriter = new RecordingDealWriter();
+    let inputRecibido: CotizacionInput | undefined;
+    const worker = new LeadWorker({
+      queue,
+      quoteClient: new FixedQuoteExecutor(async (input) => {
+        inputRecibido = input;
+        return RESULT_OK;
+      }),
+      hubspotClient: dealWriter,
+      resolver: new FixedResolver(ABSA_IDS),
+    });
+
+    await queue.enqueue({ ...VALID_PAYLOAD, productor: "Concesionaria Que No Existe" });
+    await worker.runOnce();
+
+    // Decision de negocio: entre no atender el lead y cotizarlo con la cuenta
+    // general, se cotiza. Que productor se termino usando lo resuelve
+    // QuoteClient (ver resolverProductor), aca lo que importa es que no frena.
+    expect(inputRecibido?.productor).toBe("Concesionaria Que No Existe");
+    expect(dealWriter.propertyCalls.at(-1)?.properties.absa_estado).toBe("ok");
+    const [job] = await queue.list();
+    expect(job?.status).toBe("done");
+    fs.rmSync(filePath, { force: true });
+  });
+
   it("si ABSA tira un error de negocio, actualiza error_negocio_absa sin reintentar", async () => {
     const { queue, filePath } = buildQueue();
     const dealWriter = new RecordingDealWriter();

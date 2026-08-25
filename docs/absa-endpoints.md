@@ -244,25 +244,91 @@ contador. En dos capturas distintas valia 13 mientras el productor ofrecia 10
 aseguradoras y el body enviaba esas mismas 10. Se reproduce el valor observado
 (`COTIZAR_LENGTH` en `src/quote/quoteClient.ts`) en vez de calcularlo.
 
-### 3.3 Config comercial **por productor** — **CONFIRMADO**
+### 3.3 Config comercial **por productor** — **CONFIRMADO E IMPLEMENTADO**
 
 `Comercial.id_Productor` es un `<select>` con ~1033 opciones embebido en el HTML
-del cotizador. Al cambiarlo, ABSA recarga las condiciones comerciales:
+del cotizador (para esta cuenta viene precargado; para otras el select2 lo llena
+por búsqueda incremental). El JS que gobierna esto es
+`Scripts/Cotizador/Autos/productor.js`: al cambiar el productor dispara **tres**
+llamadas, no una.
 
 ```
-GET /AutoCotizador/ObtenerConfigCotizador?idProductor={id}
-  -> JSON { Estado, View } donde View es el HTML con las Aseguradoras[i] y
-     todos los campos Comercial.* de ESE productor
 GET /Combo/GetConfiguracionesWS?idOrganizador={org}&idProductor={id}&idRiesgo=9
-  -> { items: [{ text: "STD ARDAMA", value: "3345" }] }   <- id_Configuracion
+  -> { data: { items: [{ text: "STD ARDAMA", value: "3345" }] } }   <- id_Configuracion
+     (si viene una sola, el portal la selecciona solo)
+
+GET /Data/GetPaquetesComision?idOrganizador={org}&idProductor={id}&idRiesgo=9&idAseguradora=&comision=0
+  -> { data: { comisiones: [10,15,20,25,30], comisionPrincipal: 25, comisionOrg: 0 } }
+     -> Comercial.Comision y Comercial.ConfigCotizacion.ComisionOrg
+
+GET /AutoCotizador/ObtenerConfigCotizador?idProductor={id}
+  -> { Estado: 1, View: "<html...>" }
+     View reemplaza ENTERO el div #condicionesAseguradoras: las
+     Comercial.ConfigCotizacion.Aseguradoras[i] y los ~45 campos
+     Comercial.* / Poliza.* / Item.RebajasComerciales[*] de ESE productor.
+     Estado != 1 = el portal muestra `Mensaje` en un modal (productor no habilitado).
 ```
+
+Y para buscar un productor por nombre, sin crear nada:
+
+```
+GET /Combo/GetProductoresIncremental?query=ardama
+  -> { data: { items: [{ text: "ARDAMA 2020 S.A.", value: "6856" }] } }
+```
+
+**OJO: ese buscador no devuelve todos los productores.** Verificado el
+2026-08-25 contra producción: `woscoff` (7616 "WOSCOFF, GABRIEL"),
+`ballesteros` (11026) y `yimi` (9711) devuelven **cero** resultados aunque los
+tres están en el `<select>` del cotizador, mientras `zuccotti` (7688),
+`zarate` (10080), `1989` (9590) y `abril` (7998) sí aparecen. No se encontró el
+criterio; el patrón no es "persona vs concesionaria". No usarlo como fuente de
+verdad del catálogo.
+
+La lista completa (1036 en esta cuenta) es el `<select id="idProductor">` de la
+página del cotizador. Se puede abrir sin efectos secundarios con una cotización
+que ya exista, en vez de creando una nueva:
+
+```
+GET /AutoCotizador/Cotizar/{nroCotizacion}?accion=4&esRecotizacionAnalisis=False
+  -> 200 con la página completa (~190KB), combo de productores incluido
+```
+
+Implementado en `parseComboProductores()` (`src/quote/productoresCatalogo.ts`),
+con cache de 24h en `.session/` porque la alternativa —`/Cotizador/NuevaCotizacion`—
+deja una entidad de cotización vacía en la cuenta.
 
 **Implicancia:** `config/absa-comercial.json` NO es config de la cuenta, es la
 config de **un productor puntual** (el que estaba seleccionado al capturar).
 Cotizar para otro productor con esos valores da precios con el acuerdo
 comercial equivocado, y la lista de aseguradoras disponibles puede diferir.
-Hoy el productor esta fijo; para soportar varios hay que traer la config en
-vivo de estos dos endpoints en vez de leerla del archivo.
+
+Implementado en `src/quote/absaComercialClient.ts` (las tres requests, con
+cache por productor) y `parseCondicionesAseguradoras()`
+(`src/quote/absaTemplate.ts`), que reproduce lo que mandaría el navegador con
+ese HTML recién cargado. Cuatro rarezas del View que el parser tiene que
+respetar, todas verificadas contra el HTML real:
+
+| Rareza | Qué hace el parser |
+|---|---|
+| El name real va en `Name=` (mayúscula) y hay otro `name=` (minúscula) con un id corto | HTML no distingue mayúsculas en atributos y gana el primero, que es el que sirve |
+| Selects sin ninguna opción `selected` | Toma la primera, que es lo que submitea un form real |
+| Checkbox + hidden de MVC con el mismo name | El hidden (`false`) no pisa al checkbox |
+| Dos selects distintos con el mismo name (`Comercial.PlanAsegFedPat`) | Gana el primero; el navegador manda los dos y la plantilla de archivo manda uno solo desde siempre, y Federación cotiza igual |
+
+**Lo que el View NO trae:** las rebajas llegan con el default del formulario
+(casi siempre `0`) y el listado de opciones que ese productor tiene permitidas
+(`Comercial.RebajaZurich` → `0, 10, 15, 20, 25, 30`). Cuál se usa es una
+decisión comercial que el productor toma a mano en la pantalla, no un dato que
+ABSA devuelva: por eso el mapeo de productores tiene overrides
+(`campos`), y por eso la plantilla de archivo sigue siendo la fuente para su
+propio productor. Ver el README, sección "Cotizar con el productor del
+formulario".
+
+`Comercial.FranquiciaFedPat` y `Comercial.TipoVehiculoFedPat` llegan **vacíos**:
+dependen del vehículo y de la configuración, y se pueblan aparte con
+`GET /AutoCotizador/GetFranquiciasFedPat?infoAuto={infoAuto}&idConfiguracion={id}`
+y `GetTiposVehiculoFedPat` con los mismos parámetros. Hoy se mandan los valores
+de la plantilla/overrides sin consultar esos combos.
 
 ### 3.4 Guardar la cotizacion — **CONFIRMADO**
 
@@ -462,7 +528,15 @@ Consecuencias para el diseño:
   (`src/quote/absaCatalogClient.ts`): tira `SessionExpiredError`, el resolver
   relogea y reintenta una vez, y se cura solo.
 
-**Segundo patrón, en las páginas HTML** (observado el 2026-08-24): además del
+**Segundo patrón, en los endpoints JSON** (observado el 2026-08-25): con una
+sesión vieja en `.session/`, **todos** los `/Combo/*` y `/Data/*` responden
+`200` con el **cuerpo vacío** — cero bytes, sin `content-type` — y después de
+reloguear los mismos devuelven su JSON normal. No hay HTML que detectar, así
+que el síntoma era `Unexpected end of JSON input` reportado como error técnico.
+`assertNoEsPaginaDeLogin()` trata el cuerpo vacío igual que el login: sesión
+vencida, relogin y un reintento.
+
+**Tercer patrón, en las páginas HTML** (observado el 2026-08-24): además del
 login servido con 200, las vistas del cotizador responden **`302` a
 `/Cuenta/UsuarioLogOut`** cuando la sesión ya no vale. Es más traicionero que
 el anterior, porque `got` sigue el redirect y termina con una página de la que
@@ -478,14 +552,29 @@ con `conSesionFresca()` (relogin + un reintento).
 Sigue pendiente: la **duracion** real de la sesion (para poder relogear
 proactivamente en vez de reactivamente) y el nombre exacto de la cookie.
 
-## 6. Protecciones anti-bot
+## 6. Protecciones anti-bot y **lista blanca de IPs**
 
-Ninguna observada durante este flujo (login manual + cotización normal). El
-sitio corre detrás de Cloudflare (headers `cf-ray`, `cf-cache-status`) —
-Cloudflare puede tener reglas de bot-management activadas para tráfico
-anómalo (muchas requests seguidas, IPs de datacenter) aunque no se haya
-disparado acá. Recomendación: mantener `ABSA_MIN_REQUEST_INTERVAL_MS`
-conservador en producción y no asumir que nunca va a aparecer un challenge.
+**ABSA net filtra por IP.** Desde una IP no habilitada, corta con **`403` en la
+primera request** — el `GET` de la página de login, antes de ver usuario y
+contraseña. Confirmado el 2026-08-24 desplegando en un VPS de DigitalOcean:
+
+| Origen | `GET https://www.absanet.net/` |
+|---|---|
+| Máquina de la oficina | `200` |
+| Droplet (DigitalOcean) | `403` |
+| Droplet, con User-Agent de Chrome real | `403` |
+
+No se arregla del lado del cliente: los headers de navegador no cambian nada.
+**Hay que pedirle a ABSA que habilite la IP pública del servidor** antes de
+desplegar (`curl -s ifconfig.me` para saber cuál es). Está contemplado en
+`HttpFormAuthStrategy`: un 403 en esa request tira un error que lo dice.
+
+Aparte de eso, no se observó ningún challenge durante el flujo normal (login
+manual + cotización). El sitio corre detrás de Cloudflare (headers `cf-ray`,
+`cf-cache-status`), que puede tener bot-management para tráfico anómalo aunque
+no se haya disparado acá. Recomendación: mantener
+`ABSA_MIN_REQUEST_INTERVAL_MS` conservador y no asumir que nunca va a aparecer
+un challenge.
 
 ## 7. Pendientes para cerrar la Fase 0
 

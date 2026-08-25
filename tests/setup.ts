@@ -9,6 +9,9 @@ process.env.ABSA_MIN_REQUEST_INTERVAL_MS = "0";
 process.env.ABSA_MAX_RETRIES = "1";
 process.env.PORT = "3001";
 process.env.ABSA_COMERCIAL_TEMPLATE_PATH = "tests/fixtures/absa-comercial.test.json";
+// Explicito: en una maquina que tenga el mapeo real, un lead sin productor
+// resolveria contra IDs de produccion y los tests pedirian config a ABSA.
+process.env.ABSA_PRODUCTORES_PATH = "tests/fixtures/absa-productores.test.json";
 // Explicito en vacio: dotenv NO pisa lo que ya esta en process.env, pero SI
 // completa lo que falta — sin esta linea, un ABSA_ASEGURADORAS_EXCLUIDAS en el
 // .env de la maquina se cuela en los tests y les cambia la plantilla debajo.

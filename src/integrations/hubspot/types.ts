@@ -50,6 +50,14 @@ export interface HubspotLeadWebhookPayload {
   cobertura_tipo?: string;
   suma_asegurada?: string | number;
 
+  /**
+   * Productor / concesionaria que origino el lead, tal cual lo manda la lista
+   * desplegable (cerrada) del formulario. Se mapea a un `id_Productor` de ABSA
+   * en config/absa-productores.json — define el acuerdo comercial con el que se
+   * cotiza. Vacio = el productor de config/absa-comercial.json.
+   */
+  productor?: string;
+
   /** Escape hatch: cualquier otra propiedad que se mande y el mapper todavia no use explicitamente. */
   [extra: string]: unknown;
 }

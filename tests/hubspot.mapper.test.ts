@@ -111,6 +111,16 @@ describe("hubspotPayloadToCotizacionInput", () => {
     expect(() => hubspotPayloadToCotizacionInput(withoutMarca)).toThrow(BusinessValidationError);
   });
 
+  it("pasa el productor del formulario tal cual (la traduccion a un id de ABSA es de otro modulo)", () => {
+    const input = hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, productor: " Xango " });
+    expect(input.productor).toBe("Xango");
+  });
+
+  it("sin productor no inventa ninguno: se cotiza con el de la plantilla comercial", () => {
+    expect(hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, productor: "  " }).productor).toBeUndefined();
+    expect(hubspotPayloadToCotizacionInput(VALID_PAYLOAD).productor).toBeUndefined();
+  });
+
   it("lanza BusinessValidationError si anio_vehiculo no es numerico", () => {
     expect(() => hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, anio_vehiculo: "no-es-un-anio" })).toThrow(
       BusinessValidationError,
