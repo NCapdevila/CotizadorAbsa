@@ -457,6 +457,49 @@ describe("toAbsaCotizarPayload: documento del asegurado", () => {
   });
 });
 
+describe("toAbsaCotizarPayload: provincia del riesgo", () => {
+  const template = loadComercialTemplate();
+  const sinProvincia = (() => {
+    const { provincia, ...resto } = SAMPLE_INPUT.asegurado;
+    return { ...SAMPLE_INPUT, asegurado: resto };
+  })();
+
+  it("usa la provincia que salio del codigo postal, no una fija", () => {
+    // El portal nunca pide la provincia: la llena al elegir la localidad
+    // (/Localidad/GetLocalidad). Antes se mandaba "1" (Capital Federal) fijo,
+    // que para un riesgo en Cordoba es sencillamente el dato equivocado.
+    const p = toAbsaCotizarPayload(
+      { ...sinProvincia, absa: { ...SAMPLE_INPUT.absa!, idProvincia: 4 } },
+      template,
+      "token",
+    );
+    expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("4");
+  });
+
+  it("un ID pasado a mano gana, como escotilla", () => {
+    const p = toAbsaCotizarPayload(
+      { ...SAMPLE_INPUT, asegurado: { ...SAMPLE_INPUT.asegurado, provincia: "13" }, absa: { ...SAMPLE_INPUT.absa!, idProvincia: 4 } },
+      template,
+      "token",
+    );
+    expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("13");
+  });
+
+  it("un NOMBRE de provincia se ignora: es lo que manda un formulario y ABSA espera un ID", () => {
+    const p = toAbsaCotizarPayload(
+      { ...SAMPLE_INPUT, asegurado: { ...SAMPLE_INPUT.asegurado, provincia: "Cordoba" }, absa: { ...SAMPLE_INPUT.absa!, idProvincia: 4 } },
+      template,
+      "token",
+    );
+    expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("4");
+  });
+
+  it("sin provincia resuelta ni pasada, va vacio y lo valida ABSA", () => {
+    const p = toAbsaCotizarPayload(sinProvincia, template, "token");
+    expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("");
+  });
+});
+
 describe("QuoteClient.guardarCotizacion (flujo real de guardado)", () => {
   let storePath: string;
 

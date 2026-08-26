@@ -27,6 +27,22 @@ class InstantAuthStrategy implements AuthStrategy {
 
 const VEHICULO: VehiculoInput = { marca: "FIAT", modelo: "ARGO", anio: 2022 };
 
+/**
+ * `/Localidad/GetLocalidad`: de donde sale la provincia. El portal la pide
+ * siempre despues de resolver la localidad (es lo que llena el hidden
+ * `DomicilioRiesgo.id_Provincia`), asi que todo test que resuelva un CP la
+ * necesita mockeada.
+ */
+function mockGetLocalidad(idLocalidad = 313, idProvincia = 1) {
+  return nock(config.ABSA_BASE_URL)
+    .get("/Localidad/GetLocalidad")
+    .query({ idLocalidad: String(idLocalidad) })
+    .reply(200, {
+      data: { id_Pais: 80, id_Provincia: idProvincia, id_Localidad: idLocalidad, provincia: "Capital Federal" },
+      success: true,
+    });
+}
+
 function combo(items: Array<{ text: string; value: string }>) {
   return { data: { items }, success: true, isValid: true, message: null };
 }
@@ -112,6 +128,7 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
       .get("/Localidad/GetLocalidadesApi")
       .query({ query: "1425" })
       .reply(200, combo([{ text: "(1425) CAPITAL FEDERAL", value: "313" }]));
+    mockGetLocalidad(313);
     nock(config.ABSA_BASE_URL)
       .get("/Data/GetVehiculoSumaAsegurada")
       .query({ infoAuto: "170840", anio: "2022" })
@@ -128,6 +145,8 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
     expect(ids.idOrigenVehiculo).toBe(1);
     expect(ids.infoAuto).toBe(170840);
     expect(ids.idLocalidad).toBe(313);
+    // La provincia no se pide: sale de la localidad, como en el portal.
+    expect(ids.idProvincia).toBe(1);
     expect(ids.sumaAseguradaSugerida).toBe(22400000);
     expect(ids.descripcion).toBe("FIAT - ARGO 1.8 PRECISION L/21");
     // El id_Entity sale del redirect de ABSA, NO de un random local.
@@ -183,6 +202,7 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
       .get("/Localidad/GetLocalidadesApi")
       .query(true)
       .reply(200, combo([{ text: "(1425) CAPITAL FEDERAL", value: "313" }]));
+    mockGetLocalidad(313);
     nock(config.ABSA_BASE_URL).get("/Data/GetVehiculoSumaAsegurada").query(true).reply(200, { data: { sumaAsegurada: 1 } });
     // sesion vencida: ABSA manda al login en vez del cotizador
     nock(config.ABSA_BASE_URL).get("/Cotizador/NuevaCotizacion").query(true).reply(302, "", { location: "/?returnUrl=%2F" });
@@ -205,6 +225,7 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
       .get("/Localidad/GetLocalidadesApi")
       .query(true)
       .reply(200, combo([{ text: "(1425) CAPITAL FEDERAL", value: "313" }]));
+    mockGetLocalidad(313);
     nock(config.ABSA_BASE_URL).get("/Data/GetVehiculoSumaAsegurada").query(true).reply(200, { data: { sumaAsegurada: 1 } });
     nock(config.ABSA_BASE_URL).get("/Cotizador/NuevaCotizacion").query(true).reply(200, "<html>cotizador sin id</html>");
 
@@ -226,6 +247,7 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
       .get("/Localidad/GetLocalidadesApi")
       .query(true)
       .reply(200, combo([{ text: "(1425) CAPITAL FEDERAL", value: "313" }]));
+    mockGetLocalidad(313);
     nock(config.ABSA_BASE_URL).get("/Data/GetVehiculoSumaAsegurada").query(true).reply(200, { data: { sumaAsegurada: 1 } });
     nock(config.ABSA_BASE_URL)
       .get("/Cotizador/NuevaCotizacion")
@@ -262,6 +284,7 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
       .get("/Localidad/GetLocalidadesApi")
       .query(true)
       .reply(200, combo([{ text: "(1425) CAPITAL FEDERAL", value: "313" }]));
+    mockGetLocalidad(313);
     nock(config.ABSA_BASE_URL).get("/Data/GetVehiculoSumaAsegurada").query(true).reply(200, { data: { sumaAsegurada: 1 } });
     mockNuevaCotizacion(20174384);
 
@@ -298,6 +321,93 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
  * primero), no por relevancia: quedarse con el primero era quedarse con la
  * version mas nueva del modelo, no con la del cliente.
  */
+describe("AbsaHttpVehicleCatalogResolver: eleccion de localidad", () => {
+  let storePath: string;
+
+  beforeEach(() => {
+    storePath = path.join(os.tmpdir(), `absa-localidad-test-${Date.now()}-${Math.random()}.json`);
+    nock.cleanAll();
+  });
+
+  afterEach(() => {
+    fs.rmSync(storePath, { force: true });
+    nock.cleanAll();
+  });
+
+  /** Los mocks del vehiculo, que en estos tests no son lo que se prueba. */
+  function mockVehiculo() {
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetVehiculos")
+      .query(true)
+      .times(2)
+      .reply(200, combo([{ text: "FIAT - ARGO 1.8 PRECISION", value: "170840" }]));
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetAniosVehiculo")
+      .query(true)
+      .reply(200, combo([{ text: "2022", value: "2022" }]));
+    nock(config.ABSA_BASE_URL)
+      .get("/Data/GetVehiculoInfoAuto")
+      .query(true)
+      .reply(200, {
+        data: {
+          vehiculo: {
+            id_Vehiculo: 14076,
+            id_MarcaVehiculo: 17,
+            id_ModeloVehiculo: 51,
+            id_OrigenVehiculo: 1,
+            descripcion: "FIAT - ARGO 1.8 PRECISION",
+          },
+        },
+        success: true,
+      });
+    nock(config.ABSA_BASE_URL).get("/Data/GetVehiculoSumaAsegurada").query(true).reply(200, { data: {}, success: true });
+    mockNuevaCotizacion(20168012);
+  }
+
+  /** El CP 1849 tiene varias localidades y la primera NO es Claypole. */
+  function mockCp1849() {
+    nock(config.ABSA_BASE_URL)
+      .get("/Localidad/GetLocalidadesApi")
+      .query({ query: "1849" })
+      .reply(
+        200,
+        combo([
+          { text: "(1849) BARRIO PARQUE (Buenos Aires)", value: "2701" },
+          { text: "(1849) CLAYPOLE (Buenos Aires)", value: "2702" },
+          { text: "(1849) DON ORIONE (Buenos Aires)", value: "2703" },
+        ]),
+      );
+  }
+
+  it("con el nombre del formulario elige esa localidad, no la primera del combo", async () => {
+    mockVehiculo();
+    mockCp1849();
+    mockGetLocalidad(2702, 2);
+
+    const ids = await buildResolver(storePath).resolve(VEHICULO, "1849", "Claypole");
+    expect(ids.idLocalidad).toBe(2702);
+    expect(ids.idProvincia).toBe(2);
+  });
+
+  it("sin nombre se toma la primera, como antes", async () => {
+    mockVehiculo();
+    mockCp1849();
+    mockGetLocalidad(2701, 2);
+
+    const ids = await buildResolver(storePath).resolve(VEHICULO, "1849");
+    expect(ids.idLocalidad).toBe(2701);
+  });
+
+  it("un nombre que no se parece a ninguna no rompe: cae a la primera", async () => {
+    mockVehiculo();
+    mockCp1849();
+    mockGetLocalidad(2701, 2);
+
+    const ids = await buildResolver(storePath).resolve(VEHICULO, "1849", "Rosario");
+    expect(ids.idLocalidad).toBe(2701);
+  });
+});
+
 describe("AbsaHttpVehicleCatalogResolver: eleccion de version", () => {
   let storePath: string;
 
@@ -336,6 +446,7 @@ describe("AbsaHttpVehicleCatalogResolver: eleccion de version", () => {
       .get("/Localidad/GetLocalidadesApi")
       .query({ query: "1425" })
       .reply(200, combo([{ text: "(1425) CAPITAL FEDERAL", value: "313" }]));
+    mockGetLocalidad(313);
     nock(config.ABSA_BASE_URL).get("/Data/GetVehiculoSumaAsegurada").query(true).reply(200, { data: { sumaAsegurada: 22000000 } });
     mockNuevaCotizacion(24104663);
   }

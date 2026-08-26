@@ -256,6 +256,12 @@ ABSA exige **sexo, estado civil y fecha de nacimiento** (los valida del lado
 del servidor). El **documento no**: `--dni` es opcional y solo sirve para que
 la cotización quede identificada en el listado de ABSA.
 
+**La provincia no se manda**: sale del código postal, igual que en el portal
+(que la completa en un hidden al elegir la localidad). Lo que sí conviene mandar
+es `--localidad`: un CP cubre muchas —el 1849 devuelve 11— y ABSA las lista
+alfabéticamente, así que sin el nombre se cotiza con "BRIO DON ORIONE" cuando el
+cliente vive en Claypole. La localidad entra en la prima.
+
 ### Elegir la versión correcta
 
 ABSA tiene muchas versiones del mismo modelo/año y las escribe a su manera

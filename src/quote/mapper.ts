@@ -83,6 +83,32 @@ export function assertDatosAseguradoCompletos(input: CotizacionInput): void {
 }
 
 /**
+ * `DomicilioRiesgo.id_Provincia`.
+ *
+ * ABSA espera un ID numerico y **no hay lista para elegir**: en el portal es un
+ * hidden que se llena solo al elegir la localidad, asi que la fuente correcta
+ * es la provincia que el resolver saco del codigo postal
+ * (`/Localidad/GetLocalidad`).
+ *
+ * `asegurado.provincia` solo se respeta si es un ID numerico, como escotilla
+ * para forzarla a mano. Un nombre ("Cordoba", "Buenos Aires") se ignora a
+ * proposito: es lo que suele mandar un formulario, y mandarlo tal cual no da un
+ * error claro, da una cotizacion con la provincia en blanco o rechazada.
+ */
+function resolveIdProvincia(input: CotizacionInput): string {
+  const pedida = input.asegurado.provincia?.trim();
+  if (pedida && /^\d+$/.test(pedida)) return pedida;
+
+  if (pedida) {
+    logger.warn(
+      { provincia: pedida, idProvincia: input.absa?.idProvincia },
+      "asegurado.provincia no es un ID numerico: se ignora y se usa la provincia que salio del codigo postal",
+    );
+  }
+  return String(input.absa?.idProvincia ?? "");
+}
+
+/**
  * Nombre con el que la cotizacion queda guardada en el listado de ABSA
  * (`GuardarCotizacion.Descripcion`). Es texto libre y es lo unico que ve el
  * productor para encontrarla despues, asi que se arma con todo lo que sirva
@@ -179,7 +205,7 @@ export function toAbsaCotizarPayload(
   // Domicilio de riesgo
   p.set("DomicilioRiesgo.id_Localidad", String(input.absa.idLocalidad));
   p.set("DomicilioRiesgo.CodigoPostal", input.asegurado.codigoPostal ?? "");
-  p.set("DomicilioRiesgo.id_Provincia", input.asegurado.provincia ?? "");
+  p.set("DomicilioRiesgo.id_Provincia", resolveIdProvincia(input));
   p.set("DomicilioRiesgo.id_Domicilio", "");
 
   // Vehiculo

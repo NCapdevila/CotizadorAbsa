@@ -330,6 +330,60 @@ dependen del vehículo y de la configuración, y se pueblan aparte con
 y `GetTiposVehiculoFedPat` con los mismos parámetros. Hoy se mandan los valores
 de la plantilla/overrides sin consultar esos combos.
 
+### 3.3.1 Provincia del riesgo: NO se pide, se deriva del codigo postal
+
+`DomicilioRiesgo.id_Provincia` es un **hidden**, no un `<select>`: no hay lista
+de provincias que elegir. El portal lo llena solo cuando se elige la localidad
+(`Scripts/_Components/localidad.js`):
+
+```js
+Localidad.prototype.getLocalidad = function (idLocalidad) {
+    $.getJSON('/Localidad/GetLocalidad', { idLocalidad }).done(response => {
+        $(codigoPostalSelector).val(response.data.codigoPostal);
+        $(provinciaSelector).val(response.data.id_Provincia);
+        $(paisSelector).val(response.data.id_Pais);
+    });
+};
+```
+
+```
+GET /Localidad/GetLocalidadesApi?query=1425   -> { items: [{ text: "(1425) CAPITAL FEDERAL", value: "313" }] }
+GET /Localidad/GetLocalidad?idLocalidad=313
+  -> { data: { id_Pais: 80, id_Provincia: 1, id_Localidad: 313,
+               codigoPostal: "1425", localidad: "CAPITAL FEDERAL", provincia: "Capital Federal" } }
+```
+
+Verificado contra produccion el 2026-08-25 con CPs de distintas provincias:
+
+| CP | id_Localidad | id_Provincia | Provincia | Localidades con ese CP |
+|---|---|---|---|---|
+| 1425 | 313 | 1 | Capital Federal | 1 |
+| 1900 | 3184 | 2 | Buenos Aires | 26 |
+| 5000 | 21224 | 4 | Cordoba | 53 |
+| 8000 | 2839 | 2 | Buenos Aires | 42 |
+| 4000 | 20606 | 24 | Tucuman | 33 |
+| 5500 | 12991 | 13 | Mendoza | 11 |
+| 9410 | 19976 | 23 | Tierra del Fuego | 16 |
+
+**Ojo con la localidad, no con la provincia:** un CP puede tener decenas y ABSA
+las manda **en orden alfabetico, no por relevancia**. Para la provincia da igual
+(todas las de un CP son de la misma), pero la localidad entra en la prima. Caso
+real, CP 1849 (11 localidades):
+
+```
+3176    (1849) BRIO DON ORIONE (Buenos Aires)      <- la primera del combo
+646     (1849) BRIO EL PATRONATO (Buenos Aires)
+1357    (1849) BRIO EL TREBOL (Buenos Aires)
+...
+3311    (1849) CLAYPOLE (Buenos Aires)             <- la que suele ser
+```
+
+Por eso, cuando el lead trae el nombre de la localidad, se elige la mas parecida
+en vez de la primera (`rankearLocalidades()`, `src/quote/localidadMatch.ts`).
+Sin nombre, o si no se parece a ninguna, se toma la primera y queda en el log.
+
+Implementado en `resolveLocalidad()` (`src/quote/absaCatalogClient.ts`).
+
 ### 3.4 Guardar la cotizacion — **CONFIRMADO**
 
 Cotizar NO deja la cotizacion guardada: hay un paso explicito aparte.

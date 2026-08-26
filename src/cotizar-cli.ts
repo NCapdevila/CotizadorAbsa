@@ -69,7 +69,11 @@ Opcionales:
                              a un id de ABSA con config/absa-productores.json.
                              Sin esto se usa el de config/absa-comercial.json.
                              Las opciones salen de: npm run productores
-  --provincia <id>           ID numerico de provincia (default 1, el de la captura)
+  --localidad "<nombre>"     Localidad del riesgo (ej. Claypole). Un CP cubre
+                             muchas y ABSA las lista alfabeticamente: con el
+                             nombre se elige la correcta en vez de la primera.
+  --provincia <id>           Fuerza el ID de provincia. No hace falta: sale del
+                             codigo postal, igual que en el portal.
   --descripcion "<texto>"    Nombre con el que se guarda la cotizacion en ABSA
                              (default: vehiculo - patente - titular - documento)
   --sin-guardar              Cotiza pero NO deja la cotizacion guardada en ABSA
@@ -113,10 +117,10 @@ async function main() {
       sexo: args["sexo"]!.toUpperCase() === "F" ? "F" : "M",
       estadoCivil: Number(args["estadocivil"]) as CotizacionInput["asegurado"]["estadoCivil"],
       codigoPostal: args["cp"],
-      // OJO: ABSA espera un ID numerico aca, no el nombre de la provincia.
-      // El default (1) es el unico valor observado en una captura real; si el
-      // riesgo esta en otra provincia hay que pasar su ID con --provincia.
-      provincia: args["provincia"] ?? "1",
+      localidad: args["localidad"],
+      // Sin default: la provincia sale del codigo postal (ver resolveLocalidad).
+      // --provincia queda solo para forzar un ID a mano.
+      provincia: args["provincia"],
     },
     objetoAsegurado: {
       tipo: "vehiculo",
@@ -155,7 +159,7 @@ async function main() {
   console.log("Esto tarda unos minutos: hay un piso de tiempo entre requests para no generar carga anomala en ABSA.\n");
 
   console.log("[1/3] Resolviendo el vehiculo contra el catalogo de ABSA...");
-  input.absa = await resolver.resolve(input.objetoAsegurado.vehiculo!, args["cp"]);
+  input.absa = await resolver.resolve(input.objetoAsegurado.vehiculo!, args["cp"], args["localidad"]);
   // Que version se cotizo es LA decision del cotizador: tiene que verse aca y
   // no solo en el log, junto con que tan segura fue la eleccion.
   const similitud = input.absa.similitudVersion;

@@ -35,6 +35,11 @@ export interface HubspotLeadWebhookPayload {
   /** Requerido por ABSA. ID (1,2,3,4,6,7) o etiqueta ("Casado", "Soltero", ...). */
   estado_civil?: string | number;
   telefono?: string;
+  /**
+   * NO hace falta mandarla: la provincia sale del codigo postal
+   * (`/Localidad/GetLocalidad`), igual que en el portal. Si viene, solo se
+   * respeta cuando es un ID numerico de ABSA; un nombre ("Cordoba") se ignora.
+   */
   provincia?: string;
   localidad?: string;
   codigo_postal?: string;

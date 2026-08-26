@@ -6,6 +6,7 @@ import { SessionManager } from "../session/sessionManager.js";
 import type { VehiculoInput } from "./types.js";
 import { SessionExpiredError, VehicleCatalogUnresolvedError } from "./errors.js";
 import type { AbsaEntityIds, AbsaEntityResolver } from "./vehicleCatalog.js";
+import { rankearLocalidades, type CandidatoLocalidad } from "./localidadMatch.js";
 import {
   consultasDeBusqueda,
   hayVersionEnLaBusqueda,
@@ -114,15 +115,15 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
    * dejaba leads marcados como "vehiculo inexistente" por un problema de
    * sesion.
    */
-  async resolve(vehiculo: VehiculoInput, localidadQuery?: string): Promise<AbsaEntityIds> {
+  async resolve(vehiculo: VehiculoInput, localidadQuery?: string, localidadPedida?: string): Promise<AbsaEntityIds> {
     try {
       try {
-        return await this.intentarResolver(vehiculo, localidadQuery);
+        return await this.intentarResolver(vehiculo, localidadQuery, localidadPedida);
       } catch (err) {
         if (!(err instanceof SessionExpiredError)) throw err;
         logger.warn({ err: err.message }, "Sesion vencida resolviendo el catalogo, relogueando y reintentando");
         await this.sessionManager.invalidateAndRelogin();
-        return await this.intentarResolver(vehiculo, localidadQuery);
+        return await this.intentarResolver(vehiculo, localidadQuery, localidadPedida);
       }
     } catch (err) {
       if (err instanceof VehicleCatalogUnresolvedError) throw err;
@@ -176,7 +177,7 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
     }
   }
 
-  private async intentarResolver(vehiculo: VehiculoInput, localidadQuery?: string): Promise<AbsaEntityIds> {
+  private async intentarResolver(vehiculo: VehiculoInput, localidadQuery?: string, localidadPedida?: string): Promise<AbsaEntityIds> {
     const session = await this.sessionManager.getSession();
     const jar = SessionManager.jarFromArtifact(session);
     const headers = session.extraHeaders;
@@ -205,7 +206,7 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
       if (!tieneAnio) continue;
 
       const detalle = await this.getVehiculoInfoAuto(jar, headers, infoAuto);
-      const idLocalidad = await this.resolveLocalidad(jar, headers, localidadQuery);
+      const localidad = await this.resolveLocalidad(jar, headers, localidadQuery, localidadPedida);
       const sumaAseguradaSugerida = await this.getSumaAseguradaSugerida(jar, headers, infoAuto, vehiculo.anio);
 
       // La descripcion de /Data/GetVehiculoInfoAuto es la canonica de ABSA; la
@@ -245,7 +246,8 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
         idModeloVehiculo: detalle.id_ModeloVehiculo,
         idOrigenVehiculo: detalle.id_OrigenVehiculo,
         infoAuto: Number(infoAuto),
-        idLocalidad,
+        idLocalidad: localidad.idLocalidad,
+        idProvincia: localidad.idProvincia,
         idFormaRastreo: 1,
         sumaAseguradaSugerida,
         descripcion,
@@ -350,7 +352,25 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
     return parsed.data.vehiculo;
   }
 
-  private async resolveLocalidad(jar: CookieJar, headers: Record<string, string>, query: string | undefined): Promise<number> {
+  /**
+   * Codigo postal -> `id_Localidad` + `id_Provincia`.
+   *
+   * La provincia NO se pide ni se elige: en el portal es un hidden que se
+   * llena solo cuando se elige la localidad (`Components.Localidad.getLocalidad`
+   * hace justo estas dos llamadas). Por eso se resuelve aca y no se le pide a
+   * quien cotiza — antes se mandaba `1` (Capital Federal) fijo, que para un
+   * riesgo en cualquier otra provincia es sencillamente el dato equivocado.
+   *
+   * OJO con la localidad: un CP puede tener decenas (CP 8000 devuelve 42), y
+   * se toma la primera. Para la PROVINCIA da igual —todas las de un CP son de
+   * la misma— pero la localidad exacta puede no ser la del cliente.
+   */
+  private async resolveLocalidad(
+    jar: CookieJar,
+    headers: Record<string, string>,
+    query: string | undefined,
+    localidadPedida?: string,
+  ): Promise<{ idLocalidad: number; idProvincia?: number }> {
     if (!query) {
       throw new Error("Falta codigo postal/localidad del asegurado -- no se puede resolver DomicilioRiesgo.id_Localidad");
     }
@@ -358,7 +378,85 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
     if (items.length === 0) {
       throw new Error(`ABSA net no encontro ninguna localidad para "${query}"`);
     }
-    return Number(items[0]!.value);
+
+    const elegida = this.elegirLocalidad(items, query, localidadPedida);
+    const idLocalidad = Number(elegida.value);
+    return { idLocalidad, idProvincia: await this.getProvinciaDeLocalidad(jar, headers, idLocalidad) };
+  }
+
+  /**
+   * Entre todas las localidades del CP, la que pidio el formulario.
+   *
+   * Un CP cubre muchas (el 5000 devuelve 53) y ABSA las manda en orden
+   * alfabetico, no por relevancia: quedarse con la primera es cotizar
+   * "ARGUELLO (NORTE)" cuando el cliente vive en otro lado. Como la localidad
+   * entra en la prima, con el nombre a mano se elige la mas parecida.
+   *
+   * Si no vino nombre, o si no se parece a ninguna, se cae a la primera (el
+   * comportamiento de antes) y queda dicho en el log.
+   */
+  private elegirLocalidad(
+    items: CandidatoLocalidad[],
+    query: string,
+    localidadPedida: string | undefined,
+  ): CandidatoLocalidad {
+    if (items.length === 1) return items[0]!;
+
+    const ranking = rankearLocalidades(items, localidadPedida);
+    const mejor = ranking[0]!;
+    const datos = {
+      query,
+      localidadPedida,
+      elegida: mejor.text,
+      idLocalidad: Number(mejor.value),
+      localidades: items.length,
+      alternativas: ranking.slice(1, 4).map((c) => c.nombre),
+    };
+
+    if (!localidadPedida) {
+      logger.info(datos, "El codigo postal tiene varias localidades y no vino cual: se toma la primera");
+      return items[0]!;
+    }
+    if (mejor.similitud === 0) {
+      logger.warn(
+        datos,
+        `La localidad "${localidadPedida}" no se parece a ninguna de las ${items.length} del codigo postal: se toma la primera`,
+      );
+      return items[0]!;
+    }
+
+    logger.info({ ...datos, similitud: mejor.similitud }, "Localidad elegida por parecido entre las del codigo postal");
+    return mejor;
+  }
+
+  /** `/Localidad/GetLocalidad`: la misma llamada que hace el portal para llenar el hidden de provincia. */
+  private async getProvinciaDeLocalidad(
+    jar: CookieJar,
+    headers: Record<string, string>,
+    idLocalidad: number,
+  ): Promise<number | undefined> {
+    const response = await httpAbsa.get(new URL("/Localidad/GetLocalidad", config.ABSA_BASE_URL), {
+      cookieJar: jar,
+      headers,
+      searchParams: { idLocalidad: String(idLocalidad) },
+      throwHttpErrors: false,
+      timeout: { request: 15_000 },
+    });
+    if (response.statusCode !== 200) {
+      throw new Error(`GetLocalidad respondio status ${response.statusCode}`);
+    }
+    assertNoEsPaginaDeLogin(response.body, response.headers["content-type"], "/Localidad/GetLocalidad");
+
+    const parsed = JSON.parse(response.body) as { data?: { id_Provincia?: number; provincia?: string } };
+    const idProvincia = parsed?.data?.id_Provincia;
+    if (!idProvincia) {
+      // No se corta la cotizacion: ABSA valida la provincia del lado del
+      // servidor y el mensaje va a ser mas claro que uno inventado aca.
+      logger.warn({ idLocalidad }, "GetLocalidad no devolvio id_Provincia: se cotiza sin provincia");
+      return undefined;
+    }
+    logger.debug({ idLocalidad, idProvincia, provincia: parsed.data?.provincia }, "Provincia resuelta desde la localidad");
+    return idProvincia;
   }
 
   private async getSumaAseguradaSugerida(

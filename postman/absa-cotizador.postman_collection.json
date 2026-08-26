@@ -7,7 +7,7 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:3000",
+      "value": "https://api.cebrokers.com.ar",
       "type": "string"
     },
     {
@@ -67,7 +67,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"dealId\": \"{{dealId}}\",\n  \"contactId\": \"\",\n  \"firstname\": \"Juan\",\n  \"lastname\": \"Perez\",\n  \"dni\": \"30123456\",\n  \"sexo\": \"M\",\n  \"fecha_nacimiento\": \"1990-01-15\",\n  \"codigo_postal\": \"1425\",\n  \"provincia\": \"1\",\n  \"marca_vehiculo\": \"CHEVROLET\",\n  \"modelo_vehiculo\": \"TRACKER\",\n  \"version_vehiculo\": \"1.2 TURBO AT PREMIER\",\n  \"anio_vehiculo\": \"2021\",\n  \"patente\": \"AB123CD\"\n}",
+          "raw": "{\n  \"dealId\": \"{{dealId}}\",\n  \"contactId\": \"\",\n  \"firstname\": \"Juan\",\n  \"lastname\": \"Perez\",\n  \"productor\": \"Ardama\",\n  \"dni\": \"30123456\",\n  \"sexo\": \"M\",\n  \"fecha_nacimiento\": \"1990-01-15\",\n  \"codigo_postal\": \"1849\",\n  \"localidad\": \"Claypole\",\n  \"marca_vehiculo\": \"CHEVROLET\",\n  \"modelo_vehiculo\": \"TRACKER\",\n  \"version_vehiculo\": \"1.2 TURBO AT PREMIER\",\n  \"anio_vehiculo\": \"2021\",\n  \"patente\": \"AB123CD\"\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -85,7 +85,7 @@
             "absa"
           ]
         },
-        "description": "El request que va a hacer FormLeads después de crear el Contact y el Deal. Responde 202 al instante y cotiza en segundo plano; el resultado se escribe en el **Deal** (propiedades `absa_*` y `cotizacion_absa`), no en esta respuesta.\n\nRequisitos del lado del servidor:\n\n- `HUBSPOT_ACCESS_TOKEN` y `HUBSPOT_WEBHOOK_SECRET` seteados (si falta alguno, este endpoint **no existe** y da 404).\n- `config/hubspot-properties.json` creado. Si falta, el lead se cotiza igual (3-4 min) y recién ahí falla al escribir el Deal.\n\n`sexo` es obligatorio; `estado_civil` se asume Casado; el `dni` es opcional.\n\nSi mandás el mismo `dealId` dos veces mientras la primera está en curso, responde `duplicado: true` y no encola de nuevo."
+        "description": "El request que va a hacer FormLeads después de crear el Contact y el Deal. Responde 202 al instante y cotiza en segundo plano; el resultado se escribe en el **Deal** (propiedades `absa_*` y `cotizacion_absa`), no en esta respuesta.\n\nRequisitos del lado del servidor:\n\n- `HUBSPOT_ACCESS_TOKEN` y `HUBSPOT_WEBHOOK_SECRET` seteados (si falta alguno, este endpoint **no existe** y da 404).\n- `config/hubspot-properties.json` creado. Si falta, el lead se cotiza igual (3-4 min) y recién ahí falla al escribir el Deal.\n\n`sexo` es obligatorio; `estado_civil` se asume Casado; el `dni` es opcional.\n\n**`localidad` no es decorativa.** Un codigo postal cubre muchas localidades (el 1849 devuelve 11) y ABSA las lista alfabeticamente, asi que sin el nombre se cotiza con la primera --\"BRIO DON ORIONE\" en vez de Claypole-- y la localidad entra en el calculo de la prima. Si el nombre no matchea ninguna, no falla: usa la primera y lo deja en el log.\n\n**`provincia` no se manda**: sale sola del codigo postal, igual que en el portal.\n\n**`productor`** es el valor de la lista del formulario y se traduce a un productor de ABSA con `config/absa-productores.json` (match exacto). Lo que no este mapeado, o si el campo no viene, cotiza con el productor por defecto (ARDAMA).\n\nSi mandás el mismo `dealId` dos veces mientras la primera está en curso, responde `duplicado: true` y no encola de nuevo."
       },
       "event": [
         {

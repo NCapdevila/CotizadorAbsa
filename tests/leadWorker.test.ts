@@ -6,6 +6,7 @@ import { LeadWorker, type QuoteExecutor, type DealWriter } from "../src/queue/wo
 import { JobQueue } from "../src/queue/jobQueue.js";
 import { resetHubspotPropertiesCache } from "../src/integrations/hubspot/propertiesConfig.js";
 import type { AbsaEntityResolver, AbsaEntityIds } from "../src/quote/vehicleCatalog.js";
+import type { VehiculoInput } from "../src/quote/types.js";
 import { VehicleCatalogUnresolvedError, BusinessValidationError } from "../src/quote/errors.js";
 import type { HubspotLeadWebhookPayload } from "../src/integrations/hubspot/types.js";
 import type { CotizacionInput, CotizacionResult } from "../src/quote/types.js";
@@ -63,11 +64,15 @@ class RecordingDealWriter implements DealWriter {
 }
 
 class FixedResolver implements AbsaEntityResolver {
+  /** Con que argumentos lo llamo el worker (para chequear que le pase la localidad). */
+  llamadoCon?: { query?: string; localidad?: string };
+
   constructor(
     private readonly ids: AbsaEntityIds | null,
     private readonly err?: Error,
   ) {}
-  async resolve(): Promise<AbsaEntityIds> {
+  async resolve(_vehiculo: VehiculoInput, query?: string, localidad?: string): Promise<AbsaEntityIds> {
+    this.llamadoCon = { query, localidad };
     if (this.err) throw this.err;
     return this.ids!;
   }
@@ -272,6 +277,25 @@ describe("LeadWorker.runOnce", () => {
     expect(dealWriter.propertyCalls[0]?.properties.absa_estado).toBe("error_catalogo_no_resuelto");
     const [job] = await queue.list();
     expect(job?.status).toBe("done");
+    fs.rmSync(filePath, { force: true });
+  });
+
+  it("le pasa al resolver la localidad del lead, no solo el codigo postal", async () => {
+    // Un CP cubre muchas localidades y ABSA las lista alfabeticamente: sin el
+    // nombre se cotiza con la primera (Claypole termina siendo "BRIO DON ORIONE").
+    const { queue, filePath } = buildQueue();
+    const resolver = new FixedResolver(ABSA_IDS);
+    const worker = new LeadWorker({
+      queue,
+      quoteClient: new FixedQuoteExecutor(async () => RESULT_OK),
+      hubspotClient: new RecordingDealWriter(),
+      resolver,
+    });
+
+    await queue.enqueue({ ...VALID_PAYLOAD, codigo_postal: "1849", localidad: "Claypole" });
+    await worker.runOnce();
+
+    expect(resolver.llamadoCon).toEqual({ query: "1849", localidad: "Claypole" });
     fs.rmSync(filePath, { force: true });
   });
 

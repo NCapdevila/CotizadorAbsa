@@ -10,6 +10,12 @@ export interface AbsaEntityIds {
   idOrigenVehiculo: number;
   infoAuto: number;
   idLocalidad: number;
+  /**
+   * Provincia del riesgo. NO se pide: sale de la localidad
+   * (`/Localidad/GetLocalidad`), igual que en el portal, donde es un hidden que
+   * se llena solo al elegir el codigo postal.
+   */
+  idProvincia?: number;
   idFormaRastreo?: number;
   /** Sugerida por ABSA net (Data/GetVehiculoSumaAsegurada) para cuando el input no trae una. */
   sumaAseguradaSugerida?: number;
@@ -41,7 +47,13 @@ export interface AbsaEntityIds {
  * conocidas (ambiguedad de version/motorizacion, id_Entity asumido).
  */
 export interface AbsaEntityResolver {
-  resolve(vehiculo: VehiculoInput, localidadOCodigoPostal?: string): Promise<AbsaEntityIds>;
+  /**
+   * `localidadOCodigoPostal` es con lo que se busca en el combo de ABSA (el CP,
+   * normalmente). `localidad` es el NOMBRE que mando el formulario y sirve para
+   * elegir entre las muchas que comparte un mismo CP -- sin eso se toma la
+   * primera, que es la primera alfabeticamente (ver ./localidadMatch.ts).
+   */
+  resolve(vehiculo: VehiculoInput, localidadOCodigoPostal?: string, localidad?: string): Promise<AbsaEntityIds>;
 }
 
 /**

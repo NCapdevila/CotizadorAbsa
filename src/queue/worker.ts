@@ -139,6 +139,8 @@ export class LeadWorker {
       input.absa = await this.resolver.resolve(
         input.objetoAsegurado.vehiculo!,
         input.asegurado.codigoPostal ?? input.asegurado.localidad,
+        // El nombre elige entre las muchas localidades que comparten un CP.
+        input.asegurado.localidad,
       );
     } catch (err) {
       if (err instanceof VehicleCatalogUnresolvedError) {

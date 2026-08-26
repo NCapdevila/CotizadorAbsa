@@ -163,7 +163,6 @@ necesitamos el `dealId` que ya existe).
       "dni": "{{associatedContact.dni}}",
       "fecha_nacimiento": "{{associatedContact.fecha_nacimiento}}",
       "telefono": "{{associatedContact.phone}}",
-      "provincia": "{{associatedContact.provincia}}",
       "localidad": "{{associatedContact.localidad}}",
       "codigo_postal": "{{associatedContact.codigo_postal}}",
       "marca_vehiculo": "{{deal.marca_vehiculo}}",
@@ -183,6 +182,12 @@ necesitamos el `dealId` que ya existe).
     **`codigo_postal` importa**: sin código postal (o `localidad`) el
     resolver de catálogo no puede resolver `DomicilioRiesgo.id_Localidad` y
     el Deal va a quedar en `error_catalogo_no_resuelto`.
+
+    **`localidad` no es decorativa**: un código postal cubre muchas localidades
+    (el 1849 devuelve 11) y ABSA las lista alfabéticamente, así que sin el
+    nombre se cotiza con la primera —"BRIO DON ORIONE" en vez de Claypole— y la
+    localidad entra en el cálculo de la prima. La **provincia**, en cambio, no
+    hace falta mandarla: sale del código postal.
 
     **`productor` define con qué productor de ABSA se cotiza** (la
     configuración/tarifa, la comisión y qué aseguradoras). Es el valor de la
@@ -284,7 +289,6 @@ try {
       sexo: data.sexo,                      // OBLIGATORIO
       fecha_nacimiento: data.fechaNacimiento,
       codigo_postal: data.codigoPostal,
-      provincia: data.provincia,
       localidad: data.localidad,
       marca_vehiculo: data.marca,
       modelo_vehiculo: data.modelo,
