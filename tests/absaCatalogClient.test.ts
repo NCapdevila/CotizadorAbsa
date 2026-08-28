@@ -226,6 +226,47 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
     expect(ids.descripcion).toBe("RENAULT - MASTER 2.3 DCI FURGON L1H1 AA");
   });
 
+  /**
+   * El rescate sirve para CONSEGUIR candidatos, no para mejorar puntajes.
+   * Medido en produccion el 2026-08-28: con 11, 16, 21, 41 y 89 candidatos del
+   * modelo, ampliar la consulta no movio la similitud ni un punto y costo una
+   * o dos requests por lead. Sin este corte, el `version_vehiculo` que manda el
+   * formulario ("SEDAN 4 PUERTAS") deja el umbral inalcanzable y el rescate se
+   * dispara en casi todos los leads.
+   */
+  it("no gasta requests en rescatar cuando ya hay candidatos del modelo de sobra", async () => {
+    const muchos = Array.from({ length: 12 }, (_, i) => ({
+      text: `TOYOTA - TOYOTA - COROLLA 1.8 XEI L/1${i} CVT`,
+      value: `9000${i}`,
+    }));
+    nock(config.ABSA_BASE_URL).get("/Combo/GetVehiculos").query(true).times(2).reply(200, combo(muchos));
+    // OJO: no sirve `optionally()` + `isDone()` para esto — en nock un
+    // interceptor opcional cuenta como "done" aunque nunca se haya llamado.
+    // Hay que contar las llamadas a mano.
+    let rescates = 0;
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetVehiculos")
+      .query(true)
+      .optionally()
+      .reply(200, () => {
+        rescates++;
+        return combo(muchos);
+      });
+
+    const versiones = await buildResolver(storePath).listarVersiones({
+      marca: "TOYOTA",
+      modelo: "COROLLA XEI 1.8 CVT",
+      version: "SEDAN 4 PUERTAS",
+      anio: 2016,
+    });
+
+    // Match flojo (el "SEDAN 4 PUERTAS" no lo tiene ningun candidato) pero hay
+    // 12 versiones del modelo: la correcta esta entre ellas.
+    expect(versiones.length).toBe(12);
+    expect(versiones[0]!.similitud).toBeLessThan(60);
+    expect(rescates).toBe(0);
+  });
+
   it("el rescate no se cuelga si tampoco encuentra nada: sigue siendo catalogo no resuelto", async () => {
     nock(config.ABSA_BASE_URL).get("/Combo/GetVehiculos").query(true).times(4).reply(200, combo([]));
 

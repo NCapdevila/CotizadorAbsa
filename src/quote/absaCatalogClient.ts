@@ -64,6 +64,13 @@ const ID_RIESGO_AUTO = 9;
  */
 const SIMILITUD_ACEPTABLE = 60;
 
+/**
+ * Debajo de esta cantidad de candidatos DEL MODELO pedido vale la pena gastar
+ * una request en una consulta mas amplia; por encima ya hay de donde elegir.
+ * Ver el comentario del rescate en `buscarYRankear`.
+ */
+const POCOS_CANDIDATOS = 10;
+
 /** Cuantas alternativas se devuelven/loguean para que un humano pueda revisar la eleccion. */
 const MAX_ALTERNATIVAS = 5;
 
@@ -328,9 +335,17 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
 
     // El disparador mira los candidatos DEL MODELO, no el pool crudo: que
     // ABSA haya devuelto 30 autos no sirve de nada si ninguno es el modelo.
-    if (ranking.length === 0 || flojo) {
+    // El rescate sirve para CONSEGUIR candidatos, no para mejorar puntajes: si
+    // ya tenemos muchas versiones del modelo pedido, la correcta esta entre
+    // ellas y una consulta mas amplia solo puede traer autos de otro modelo,
+    // que el filtro descarta igual. Medido en produccion el 2026-08-28: con
+    // 11, 16, 21, 41 y 89 candidatos el rescate no movio la similitud ni un
+    // punto (38->38, 49->49, 0->0, 43->43, 56->56) y costo una o dos requests
+    // por lead. Con 3 candidatos, en cambio, subio de 2% a 19%.
+    if (ranking.length === 0 || (flojo && ranking.length < POCOS_CANDIDATOS)) {
       for (const q of consultasDeRescate(vehiculo)) {
         const antes = ranking[0]?.similitud;
+        const candidatosAntes = ranking.length;
         const items = await this.getCombo(jar, headers, "/Combo/GetVehiculos", { q, sumaAseguradaMinima: "0" });
         for (const item of items) {
           if (!porInfoAuto.has(item.value)) porInfoAuto.set(item.value, item);
@@ -340,13 +355,23 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
         if (ranking.length > 0) {
           const ahora = ranking[0]!.similitud;
           logger.warn(
-            { pedido: textoBuscado(vehiculo), rescate: q, candidatosDelModelo: ranking.length, similitudAntes: antes, similitudAhora: ahora },
+            { pedido: textoBuscado(vehiculo), rescate: q, candidatosAntes, candidatosDespues: ranking.length, similitudAntes: antes, similitudAhora: ahora },
             "Las consultas normales no alcanzaron: se busco mas amplio. Revisar el parecido de la version elegida.",
           );
-          // Corta si ya alcanza, o si ampliar dejo de mejorar: cuando una
-          // consulta mas amplia no sube el parecido, la siguiente (todavia mas
-          // amplia) tampoco lo va a subir — solo agrega ruido y una request.
-          if (!seEligioPorParecido || ahora >= SIMILITUD_ACEPTABLE || (antes !== undefined && ahora <= antes)) break;
+          // Corta si ya alcanza, si ya hay de donde elegir, o si ampliar dejo
+          // de mejorar: cuando una consulta mas amplia no sube el parecido, la
+          // siguiente (todavia mas amplia) tampoco lo va a subir — solo agrega
+          // ruido y una request. El chequeo de cantidad va tambien ACA y no
+          // solo antes del loop: si el primer rescate ya trajo un monton de
+          // versiones del modelo, el segundo no tiene nada que aportar.
+          if (
+            !seEligioPorParecido ||
+            ahora >= SIMILITUD_ACEPTABLE ||
+            ranking.length >= POCOS_CANDIDATOS ||
+            (antes !== undefined && ahora <= antes)
+          ) {
+            break;
+          }
         }
       }
     }

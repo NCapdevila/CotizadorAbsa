@@ -113,6 +113,13 @@ export function normalizarDescripcion(texto: string): string {
     // lados (pedido y catalogo), asi que si alguna marca SI lo escribe junto
     // los dos quedan igual y el matching no se altera.
     .replace(/\b([A-Z])(\d)\b/g, "$1 $2")
+    // Puertas: el formulario manda "5P" o "SEDAN 5 PUERTAS" y ABSA escribe
+    // "5 P.", "3 PTAS" o "5 P". Llevarlas a una forma unica de los dos lados
+    // las convierte en una coincidencia real en vez de dos palabras faltantes,
+    // y ademas hace que distingan de verdad una 3 puertas de una 5 puertas
+    // (por eso se canonizan y no se descartan, como si se hace en la CONSULTA,
+    // donde el AND de substrings de ABSA no perdona la diferencia de escritura).
+    .replace(/\b(\d)\s*(?:PUERTAS|PTAS|P)\b\.?/g, "$1 PUERTAS")
     .replace(/[^A-Z0-9.]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();

@@ -40,6 +40,18 @@ if (hubspotEnabled) {
   leadWorker.start();
 
   app.post("/webhooks/hubspot/absa", async (req: Request, res: Response) => {
+    // Se loguea ANTES de validar nada. Sin esta linea no habia forma de
+    // responder "¿el webhook llego?" mirando nuestros logs: un lead que no
+    // aparecia podia ser HubSpot que no disparo, o nosotros que lo tiramos.
+    // El 2026-08-28 hubo que ir al access.log de nginx para distinguirlo.
+    //
+    // Va el dealId y nada mas del body: el payload trae PII del lead (nombre,
+    // DNI, fecha de nacimiento) y estos logs se leen a mano todo el tiempo.
+    logger.info(
+      { dealId: typeof req.body?.dealId === "string" ? req.body.dealId : "(sin dealId)", ip: req.ip },
+      "Webhook de HubSpot recibido",
+    );
+
     if (!isValidWebhookSecret(req.header("x-webhook-secret"))) {
       logger.warn({ ip: req.ip }, "Webhook de HubSpot rechazado: secreto invalido o ausente");
       res.status(401).json({ ok: false, error: "secreto_invalido" });
@@ -48,6 +60,12 @@ if (hubspotEnabled) {
 
     const parsed = hubspotLeadWebhookSchema.safeParse(req.body);
     if (!parsed.success) {
+      // Antes esto devolvia 400 sin dejar rastro: el lead se perdia en silencio
+      // y no habia con que reclamarle al workflow de HubSpot.
+      logger.warn(
+        { ip: req.ip, errores: parsed.error.issues.map((i) => `${i.path.join(".") || "(raiz)"}: ${i.message}`) },
+        "Webhook de HubSpot rechazado: el payload no tiene la forma esperada",
+      );
       res.status(400).json({ ok: false, error: "payload_invalido", detalles: parsed.error.flatten() });
       return;
     }

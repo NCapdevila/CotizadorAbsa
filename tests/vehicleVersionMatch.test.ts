@@ -308,3 +308,38 @@ describe("tokensDeModelo", () => {
     expect(tokensDeModelo({ marca: "CITROEN", modelo: "C4 LOUNGE 1.6I THP", anio: 2014 })).toEqual(["C", "4"]);
   });
 });
+
+/**
+ * El formulario manda la cantidad de puertas de tres formas distintas ("5P",
+ * "SEDAN 5 PUERTAS") y ABSA de otras tres ("5 P.", "3 PTAS", "5 P"). Sin
+ * canonizarlas, cada lead llegaba con dos o tres palabras faltantes que ningun
+ * candidato podia tener, y eso hundia la similitud de TODOS por igual: el
+ * PEUGEOT 207 real daba 38% y el SONIC 65% eligiendo el auto correcto.
+ *
+ * Se canonizan y no se descartan (como si se hace en la CONSULTA) porque las
+ * puertas SI distinguen versiones: una 3 puertas no es la misma que una 5.
+ */
+describe("normalizarDescripcion: cantidad de puertas", () => {
+  it("lleva todas las formas a una sola", () => {
+    expect(normalizarDescripcion("5P")).toBe("5 PUERTAS");
+    expect(normalizarDescripcion("SEDAN 5 PUERTAS")).toBe("SEDAN 5 PUERTAS");
+    expect(normalizarDescripcion("CELTA 1.4 3 PTAS LS AA")).toBe("CELTA 1.4 3 PUERTAS LS AA");
+    expect(normalizarDescripcion("307 1.6 4 P. XS")).toBe("307 1.6 4 PUERTAS XS");
+  });
+
+  it("no se come la cilindrada ni otras siglas", () => {
+    expect(normalizarDescripcion("1.6 THP")).toBe("1.6 THP");
+    expect(normalizarDescripcion("2.0 TDI AT")).toBe("2.0 TDI AT");
+  });
+
+  it("ahora las puertas cuentan como coincidencia y distinguen versiones", () => {
+    const candidatos = [
+      { text: "CHEVROLET - CHEVROLET - CELTA 1.4 3 PTAS LS AA", value: "1" },
+      { text: "CHEVROLET - CHEVROLET - CELTA 1.4 5 PTAS LS AA", value: "2" },
+    ];
+    const cincoPuertas = rankearCandidatos(candidatos, { marca: "CHEVROLET", modelo: "CELTA 1.4 LS 5P AA", anio: 2013 });
+    expect(cincoPuertas[0]!.value).toBe("2");
+    const tresPuertas = rankearCandidatos(candidatos, { marca: "CHEVROLET", modelo: "CELTA 1.4 LS 3P AA", anio: 2013 });
+    expect(tresPuertas[0]!.value).toBe("1");
+  });
+});
