@@ -117,7 +117,9 @@ npm install
 | `HUBSPOT_BARRIDO` | no | `true` | `true`/`false`. Barrido de rescate: busca en HubSpot Deals sin cotizar y los encola, para los leads cuyo webhook nunca llegó. Prendido de fábrica — ponelo en `false` solo para apagarlo a propósito |
 | `HUBSPOT_BARRIDO_SIMULACRO` | no | `false` | `true`/`false`. Loguea qué encolaría y no encola nada. **Usalo en la primera pasada** |
 | `HUBSPOT_BARRIDO_INTERVAL_MS` | no | `600000` | Cada cuánto barre (10 min) |
-| `HUBSPOT_BARRIDO_HORAS` | no | `24` | Cuántas horas hacia atrás mira. Evita despertar leads viejos el día que se prenda |
+| `HUBSPOT_BARRIDO_HORAS` | no | `24` | Cuántas horas hacia atrás mira. Evita despertar leads viejos: hay ~32.000 Deals sin cotizar en el portal |
+| `HUBSPOT_BARRIDO_SOLO_HOY` | no | `true` | `true`/`false`. Además de las horas, no pasar del comienzo del día de hoy: **de ayer para atrás no se toca** |
+| `HUBSPOT_BARRIDO_ZONA` | no | `America/Argentina/Buenos_Aires` | Con qué zona horaria se decide dónde empieza "hoy" |
 | `HUBSPOT_BARRIDO_MAX` | no | `25` | Tope de Deals por pasada |
 
 ### Archivos de config (no están en el repo)

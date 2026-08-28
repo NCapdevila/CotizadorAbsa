@@ -73,9 +73,24 @@ const envSchema = z.object({
   HUBSPOT_BARRIDO_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
   /**
    * Cuantas horas hacia atras mira. La ventana evita que, el dia que se prenda,
-   * el barrido despierte meses de Deals viejos que nadie quiere recotizar.
+   * el barrido despierte meses de Deals viejos que nadie quiere recotizar: hay
+   * 32.216 Deals sin cotizar en el portal (medido el 2026-08-28), que a ~90
+   * segundos cada uno son 33 dias de cotizacion continua.
    */
   HUBSPOT_BARRIDO_HORAS: z.coerce.number().int().positive().default(24),
+  /**
+   * Ademas de las horas, no pasar del comienzo del dia de HOY: un Deal de ayer
+   * no se toca aunque entre en la ventana. Decision del negocio — un lead del
+   * dia anterior que nadie cotizo ya perdio el momento, y recotizarlo escribe
+   * propiedades sobre un Deal que alguien puede estar trabajando a mano.
+   *
+   * OJO con el borde: un lead de las 23:50 cuyo webhook fallo y que el barrido
+   * no llegue a levantar antes de medianoche queda huerfano para siempre. Es el
+   * precio de la regla; con `false` vuelve a ser una ventana corrida de HORAS.
+   */
+  HUBSPOT_BARRIDO_SOLO_HOY: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  /** Zona horaria con la que se decide donde empieza "hoy". */
+  HUBSPOT_BARRIDO_ZONA: z.string().default("America/Argentina/Buenos_Aires"),
   /** Tope de Deals por pasada: un techo al daño si el filtro trae de mas. */
   HUBSPOT_BARRIDO_MAX: z.coerce.number().int().positive().default(25),
   HUBSPOT_PROPERTIES_PATH: z.string().default("config/hubspot-properties.json"),

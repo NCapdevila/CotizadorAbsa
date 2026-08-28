@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { JobQueue } from "../src/queue/jobQueue.js";
-import { LeadSweeper } from "../src/integrations/hubspot/leadSweeper.js";
+import { LeadSweeper, comienzoDelDia } from "../src/integrations/hubspot/leadSweeper.js";
 import { dealYContactoAPayload } from "../src/integrations/hubspot/leadSweeperMapper.js";
 
 /**
@@ -144,5 +144,68 @@ describe("LeadSweeper", () => {
 
     expect(await sweeper.runOnce()).toEqual({ encontrados: 2, encolados: 1 });
     expect((await queue.list()).map((j) => j.payload.dealId)).toEqual(["64476744595"]);
+  });
+});
+
+/**
+ * "De ayer para atras no se toca" es dia CALENDARIO, no 24h corridas: a las 10
+ * de la maniana una ventana de 24h todavia agarraria Deals de ayer a las 10.
+ */
+describe("comienzoDelDia", () => {
+  const ZONA = "America/Argentina/Buenos_Aires";
+
+  it("da la medianoche local, no la UTC", () => {
+    // 2026-08-28 14:30 UTC = 11:30 en Buenos Aires (UTC-3).
+    const inicio = comienzoDelDia(new Date("2026-08-28T14:30:00.000Z"), ZONA);
+    expect(inicio.toISOString()).toBe("2026-08-28T03:00:00.000Z");
+  });
+
+  it("antes de la medianoche UTC sigue siendo el mismo dia local", () => {
+    // 2026-08-28 23:30 UTC = 20:30 del 28 en Buenos Aires: el dia arranco a las 03:00Z del 28.
+    expect(comienzoDelDia(new Date("2026-08-28T23:30:00.000Z"), ZONA).toISOString()).toBe("2026-08-28T03:00:00.000Z");
+  });
+
+  it("despues de la medianoche UTC pero antes de la local, todavia es el dia anterior", () => {
+    // 2026-08-29 01:00 UTC = 22:00 del 28 en Buenos Aires.
+    expect(comienzoDelDia(new Date("2026-08-29T01:00:00.000Z"), ZONA).toISOString()).toBe("2026-08-28T03:00:00.000Z");
+  });
+
+  it("nunca queda adelante del instante que se le pasa", () => {
+    const ahora = new Date("2026-08-28T03:30:00.000Z"); // 00:30 en Buenos Aires
+    expect(comienzoDelDia(ahora, ZONA).getTime()).toBeLessThanOrEqual(ahora.getTime());
+  });
+});
+
+describe("LeadSweeper: ventana", () => {
+  it("con soloHoy no pide nada de ayer, aunque las horas alcancen", async () => {
+    let pedido: Date | undefined;
+    const hubspot = stubHubspot({
+      buscarDealsSinCotizar: async (desde: Date) => {
+        pedido = desde;
+        return [];
+      },
+    });
+    const queue = new JobQueue(path.join(os.tmpdir(), `absa-ventana-${Date.now()}-${Math.random()}.json`));
+    const sweeper = new LeadSweeper({ queue, hubspotClient: hubspot as never, horasHaciaAtras: 24, soloHoy: true });
+
+    await sweeper.runOnce();
+    expect(pedido).toBeDefined();
+    expect(pedido!.getTime()).toBe(comienzoDelDia(new Date(), "America/Argentina/Buenos_Aires").getTime());
+  });
+
+  it("con soloHoy en false vuelve a ser una ventana corrida", async () => {
+    let pedido: Date | undefined;
+    const hubspot = stubHubspot({
+      buscarDealsSinCotizar: async (desde: Date) => {
+        pedido = desde;
+        return [];
+      },
+    });
+    const queue = new JobQueue(path.join(os.tmpdir(), `absa-ventana2-${Date.now()}-${Math.random()}.json`));
+    const sweeper = new LeadSweeper({ queue, hubspotClient: hubspot as never, horasHaciaAtras: 24, soloHoy: false });
+
+    await sweeper.runOnce();
+    const esperado = Date.now() - 24 * 60 * 60 * 1000;
+    expect(Math.abs(pedido!.getTime() - esperado)).toBeLessThan(5000);
   });
 });

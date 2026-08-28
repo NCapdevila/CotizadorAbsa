@@ -25,12 +25,39 @@ import { enProcesoDealProperties } from "./mapper.js";
  * No duplica trabajo: encola con la MISMA `JobQueue` que el webhook, y
  * `enqueue()` ya descarta un Deal que tenga un job pendiente o en vuelo.
  */
+/**
+ * El instante en que empezo el dia de HOY en `zona`, como Date UTC.
+ *
+ * Se calcula restando la hora local en vez de armar un string con offset
+ * fijo: asi no hay que saber si Argentina esta en -03:00 y sigue andando si
+ * alguna vez se corre en otra zona (o si el pais vuelve a tener horario de
+ * verano, que ya paso).
+ *
+ * Exportado para poder testearlo sin depender de la hora de la maquina.
+ */
+export function comienzoDelDia(ahora: Date, zona: string): Date {
+  const partes = new Intl.DateTimeFormat("en-CA", {
+    timeZone: zona,
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(ahora);
+
+  const valor = (tipo: string) => Number(partes.find((p) => p.type === tipo)?.value ?? 0);
+  const desdeMedianoche =
+    ((valor("hour") * 60 + valor("minute")) * 60 + valor("second")) * 1000 + ahora.getMilliseconds();
+  return new Date(ahora.getTime() - desdeMedianoche);
+}
+
 export interface LeadSweeperDeps {
   queue: JobQueue;
   hubspotClient?: Pick<HubspotClient, "buscarDealsSinCotizar" | "contactoDeDeal" | "leerContacto" | "updateDealProperties">;
   /** Default: HUBSPOT_BARRIDO_*. Se fuerzan en tests. */
   intervalMs?: number;
   horasHaciaAtras?: number;
+  soloHoy?: boolean;
+  zona?: string;
   maxPorPasada?: number;
   /** Loguea lo que encolaria y no encola nada. Para la primera puesta en marcha. */
   simulacro?: boolean;
@@ -41,6 +68,8 @@ export class LeadSweeper {
   private readonly hubspot: NonNullable<LeadSweeperDeps["hubspotClient"]>;
   private readonly intervalMs: number;
   private readonly horasHaciaAtras: number;
+  private readonly soloHoy: boolean;
+  private readonly zona: string;
   private readonly maxPorPasada: number;
   private readonly simulacro: boolean;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -51,6 +80,8 @@ export class LeadSweeper {
     this.hubspot = deps.hubspotClient ?? new HubspotClient();
     this.intervalMs = deps.intervalMs ?? config.HUBSPOT_BARRIDO_INTERVAL_MS;
     this.horasHaciaAtras = deps.horasHaciaAtras ?? config.HUBSPOT_BARRIDO_HORAS;
+    this.soloHoy = deps.soloHoy ?? config.HUBSPOT_BARRIDO_SOLO_HOY;
+    this.zona = deps.zona ?? config.HUBSPOT_BARRIDO_ZONA;
     this.maxPorPasada = deps.maxPorPasada ?? config.HUBSPOT_BARRIDO_MAX;
     this.simulacro = deps.simulacro ?? config.HUBSPOT_BARRIDO_SIMULACRO;
   }
@@ -61,6 +92,7 @@ export class LeadSweeper {
       {
         intervalMs: this.intervalMs,
         horasHaciaAtras: this.horasHaciaAtras,
+        soloHoy: this.soloHoy,
         maxPorPasada: this.maxPorPasada,
         simulacro: this.simulacro,
       },
@@ -91,7 +123,7 @@ export class LeadSweeper {
     if (this.corriendo) return { encontrados: 0, encolados: 0 }; // una pasada puede tardar mas que el intervalo
     this.corriendo = true;
     try {
-      const desde = new Date(Date.now() - this.horasHaciaAtras * 60 * 60 * 1000);
+      const desde = this.desdeCuando();
       const deals = await this.hubspot.buscarDealsSinCotizar(desde, this.maxPorPasada);
       if (deals.length === 0) return { encontrados: 0, encolados: 0 };
 
@@ -108,6 +140,20 @@ export class LeadSweeper {
     } finally {
       this.corriendo = false;
     }
+  }
+
+  /**
+   * El piso de la ventana. Con `soloHoy` gana el mas reciente entre las horas
+   * configuradas y el comienzo del dia: a las 10 de la maniana, una ventana de
+   * 24h todavia agarraria Deals de ayer a las 10, y "de ayer para atras no se
+   * toca" es la regla.
+   */
+  private desdeCuando(): Date {
+    const ahora = new Date();
+    const porHoras = new Date(ahora.getTime() - this.horasHaciaAtras * 60 * 60 * 1000);
+    if (!this.soloHoy) return porHoras;
+    const hoy = comienzoDelDia(ahora, this.zona);
+    return hoy > porHoras ? hoy : porHoras;
   }
 
   /**
