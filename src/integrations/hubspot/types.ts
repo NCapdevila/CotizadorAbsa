@@ -28,9 +28,19 @@ export interface HubspotLeadWebhookPayload {
   firstname?: string;
   lastname?: string;
   dni?: string;
-  /** Requerido por ABSA. dd/mm/yyyy o yyyy-mm-dd, ver mapper. */
+  /**
+   * **Requerido por ABSA**, verificado contra produccion el 2026-08-28
+   * mandando el campo vacio: responde 400 con
+   * `{"Errores":["Debe ingresar una fecha de nacimiento."]}`. Sin esto el lead
+   * queda en "datos incompletos". dd/mm/yyyy o yyyy-mm-dd, ver mapper.
+   */
   fecha_nacimiento?: string;
-  /** Requerido por ABSA. "M"/"F" o "Masculino"/"Femenino". */
+  /**
+   * "M"/"F" o "Masculino"/"Femenino". NO se exige: medido el 2026-08-28, de 30
+   * leads reales del barrido ninguno lo traia, asi que exigirlo frenaba el
+   * 100%. Sin el se asume Masculino (ver SEXO_POR_DEFECTO en ./mapper.ts), que
+   * entra en la prima y deja la cotizacion como orientativa.
+   */
   sexo?: string;
   /** Requerido por ABSA. ID (1,2,3,4,6,7) o etiqueta ("Casado", "Soltero", ...). */
   estado_civil?: string | number;

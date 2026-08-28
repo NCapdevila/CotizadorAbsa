@@ -83,11 +83,30 @@ describe("hubspotPayloadToCotizacionInput", () => {
   });
 
   it("marca como dato faltante lo que ABSA exige y el lead no trae", () => {
-    const { sexo, ...sinSexo } = VALID_PAYLOAD;
-    expect(() => hubspotPayloadToCotizacionInput(sinSexo)).toThrow(/sexo/);
-
     const { fecha_nacimiento, ...sinFecha } = VALID_PAYLOAD;
     expect(() => hubspotPayloadToCotizacionInput(sinFecha)).toThrow(/fecha_nacimiento/);
+  });
+
+  /**
+   * Medido el 2026-08-28 sobre 30 leads reales del barrido: los 30 tenian
+   * fecha de nacimiento y NINGUNO tenia sexo. Exigirlo no protegia nada,
+   * frenaba el 100% de los leads recuperados con un "datos incompletos" que
+   * nadie iba a completar a mano.
+   */
+  it("sin sexo asume Masculino en vez de frenar el lead", () => {
+    const { sexo, ...sinSexo } = VALID_PAYLOAD;
+    expect(hubspotPayloadToCotizacionInput(sinSexo).asegurado.sexo).toBe("M");
+  });
+
+  it("un sexo que no se entiende cae al mismo default en vez de frenar el lead", () => {
+    expect(hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, sexo: "X" }).asegurado.sexo).toBe("M");
+    expect(hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, sexo: "" }).asegurado.sexo).toBe("M");
+  });
+
+  it("si el lead SI trae el sexo, se respeta", () => {
+    expect(hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, sexo: "F" }).asegurado.sexo).toBe("F");
+    expect(hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, sexo: "Femenino" }).asegurado.sexo).toBe("F");
+    expect(hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, sexo: "Masculino" }).asegurado.sexo).toBe("M");
   });
 
   it("sin estado civil asume Casado en vez de frenar el lead", () => {

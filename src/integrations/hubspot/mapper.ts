@@ -3,6 +3,7 @@ import type { HubspotLeadWebhookPayload } from "./types.js";
 import { loadHubspotProperties } from "./propertiesConfig.js";
 import { BusinessValidationError } from "../../quote/errors.js";
 import { config } from "../../config.js";
+import { logger } from "../../logger.js";
 
 /** dd/mm/yyyy o yyyy-mm-dd -> yyyy-mm-dd (lo que espera CotizacionInput.asegurado.fechaNacimiento). */
 function normalizeFecha(value: string | undefined): string | undefined {
@@ -24,6 +25,21 @@ function normalizeSexo(value: unknown): "M" | "F" | undefined {
   if (v.startsWith("F")) return "F";
   return undefined;
 }
+
+/**
+ * Sexo que se asume cuando el lead no lo trae.
+ *
+ * Medido el 2026-08-28 sobre 30 leads reales del barrido: los 30 tenian fecha
+ * de nacimiento y NINGUNO tenia sexo. O sea que exigirlo no protegia nada —
+ * frenaba el 100% de los leads recuperados con un "datos incompletos" que
+ * nadie iba a completar a mano.
+ *
+ * OJO, igual que con el estado civil: el sexo ENTRA EN LA PRIMA, y bastante en
+ * conductores jovenes. Una cotizacion generada con este default es orientativa
+ * y al emitir hay que confirmar el dato real. Queda el warning en el log para
+ * poder distinguir cuales se cotizaron asumiendo.
+ */
+const SEXO_POR_DEFECTO = "M" as const;
 
 /** Catalogo real de ABSA; el 5 no existe. Acepta el ID o la etiqueta. */
 const ESTADO_CIVIL_ABSA: Record<string, EstadoCivil> = {
@@ -67,6 +83,30 @@ function toNumber(value: string | number | undefined): number | undefined {
  * Tira BusinessValidationError si falta algo minimo indispensable para
  * siquiera intentar cotizar (nombre/apellido/documento/marca/modelo/anio).
  */
+/**
+ * El sexo del lead, o el default. Se avisa por log para poder saber despues
+ * cuales cotizaciones salieron asumiendo, y se distingue "no vino" de "vino
+ * algo que no se entiende" — lo segundo puede ser un formulario mandando un
+ * valor nuevo que habria que mapear.
+ */
+function sexoDelLead(payload: HubspotLeadWebhookPayload): "M" | "F" {
+  const normalizado = normalizeSexo(payload.sexo);
+  if (normalizado) return normalizado;
+
+  if (payload.sexo) {
+    logger.warn(
+      { dealId: payload.dealId, sexo: payload.sexo, seAsume: SEXO_POR_DEFECTO },
+      "El sexo del lead no se entiende: se asume el default (entra en la prima, la cotizacion es orientativa)",
+    );
+  } else {
+    logger.info(
+      { dealId: payload.dealId, seAsume: SEXO_POR_DEFECTO },
+      "El lead no trae sexo: se asume el default (entra en la prima, la cotizacion es orientativa)",
+    );
+  }
+  return SEXO_POR_DEFECTO;
+}
+
 export function hubspotPayloadToCotizacionInput(payload: HubspotLeadWebhookPayload): CotizacionInput {
   const faltantes: string[] = [];
   if (!payload.firstname) faltantes.push("firstname");
@@ -77,14 +117,14 @@ export function hubspotPayloadToCotizacionInput(payload: HubspotLeadWebhookPaylo
   if (!payload.marca_vehiculo) faltantes.push("marca_vehiculo");
   if (!payload.modelo_vehiculo) faltantes.push("modelo_vehiculo");
   if (!payload.anio_vehiculo) faltantes.push("anio_vehiculo");
-  // ABSA rechaza la cotizacion sin estos tres (400 con "Debe seleccionar un
-  // sexo." etc). Se exigen aca para que el Deal quede marcado como
+  // ABSA rechaza la cotizacion sin fecha de nacimiento (400 con "Debe
+  // seleccionar..."). Se exige aca para que el Deal quede marcado como
   // "datos incompletos" -- accionable por una persona -- en vez de fallar mas
   // tarde como un error tecnico contra ABSA.
-  if (!payload.sexo) faltantes.push("sexo");
   if (!payload.fecha_nacimiento) faltantes.push("fecha_nacimiento");
-  // `estado_civil` NO se exige: el formulario no lo pregunta y se asume
-  // Casado (ver ESTADO_CIVIL_POR_DEFECTO). Si el lead lo trae, se respeta.
+  // NI `sexo` NI `estado_civil` se exigen: el formulario no los completa y se
+  // asumen (ver SEXO_POR_DEFECTO y ESTADO_CIVIL_POR_DEFECTO). Si el lead los
+  // trae, se respetan.
 
   if (faltantes.length > 0) {
     throw new BusinessValidationError(
@@ -109,7 +149,7 @@ export function hubspotPayloadToCotizacionInput(payload: HubspotLeadWebhookPaylo
       documentoTipo: "DNI",
       documentoNumero: payload.dni ? String(payload.dni) : undefined,
       fechaNacimiento: normalizeFecha(payload.fecha_nacimiento),
-      sexo: normalizeSexo(payload.sexo),
+      sexo: sexoDelLead(payload),
       estadoCivil: normalizeEstadoCivil(payload.estado_civil),
       email: payload.email,
       telefono: payload.telefono,
