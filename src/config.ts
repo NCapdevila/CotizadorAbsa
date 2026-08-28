@@ -52,6 +52,24 @@ const envSchema = z.object({
   HUBSPOT_WEBHOOK_SECRET: z.string().default(""),
   HUBSPOT_API_BASE_URL: z.string().url().default("https://api.hubapi.com"),
   /** Mapeo de nombres internos de propiedades custom de Deal (formato en el README, seccion "Archivos de config"). */
+  /**
+   * Barrido de rescate: busca en HubSpot Deals sin cotizar y los encola, para
+   * los leads cuyo webhook nunca llego (ver src/integrations/hubspot/leadSweeper.ts).
+   *
+   * APAGADO por default a proposito: prenderlo hace que el servicio empiece a
+   * cotizar Deals por su cuenta, y conviene mirar una pasada en simulacro antes.
+   */
+  HUBSPOT_BARRIDO: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  /** Simulacro: loguea que Deals encolaria y no encola ninguno. */
+  HUBSPOT_BARRIDO_SIMULACRO: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  HUBSPOT_BARRIDO_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
+  /**
+   * Cuantas horas hacia atras mira. La ventana evita que, el dia que se prenda,
+   * el barrido despierte meses de Deals viejos que nadie quiere recotizar.
+   */
+  HUBSPOT_BARRIDO_HORAS: z.coerce.number().int().positive().default(24),
+  /** Tope de Deals por pasada: un techo al daño si el filtro trae de mas. */
+  HUBSPOT_BARRIDO_MAX: z.coerce.number().int().positive().default(25),
   HUBSPOT_PROPERTIES_PATH: z.string().default("config/hubspot-properties.json"),
   /**
    * Si se adjunta al Deal el PDF de la cotizacion (la impresion de ABSA).

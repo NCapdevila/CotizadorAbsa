@@ -1,6 +1,8 @@
 import got from "got";
 import { config } from "../../config.js";
 import { logger } from "../../logger.js";
+import { loadHubspotProperties } from "./propertiesConfig.js";
+import { PROPIEDADES_DE_CONTACT, PROPIEDADES_DE_DEAL } from "./leadSweeperMapper.js";
 
 export interface CreateDealInput {
   properties: Record<string, string | number>;
@@ -37,6 +39,95 @@ export class HubspotClient {
 
   private authHeaders() {
     return { Authorization: `Bearer ${this.accessToken}` };
+  }
+
+  /** GET generico contra la API de HubSpot, con el error ya interpretado. */
+  private async getJson<T>(path: string, que: string): Promise<T> {
+    const response = await got.get(`${this.baseUrl}${path}`, {
+      headers: this.authHeaders(),
+      throwHttpErrors: false,
+      timeout: { request: 20_000 },
+    });
+    if (response.statusCode >= 400) {
+      throw new Error(`HubSpot rechazo ${que} (status ${response.statusCode}): ${response.body.slice(0, 400)}`);
+    }
+    return JSON.parse(response.body) as T;
+  }
+
+  /**
+   * Deals que todavia no cotizo nadie, para el barrido (ver ./leadSweeper.ts).
+   *
+   * Tres filtros, y los tres importan:
+   * - `absa_estado` SIN valor: los que ya tienen `ok` o `error_*` fueron
+   *   atendidos; volver a encolarlos seria recotizar en loop.
+   * - `marca_vehiculo` CON valor: descarta los Deals del portal que no son de
+   *   cotizacion de autos. Sin esto el barrido levanta cualquier Deal.
+   * - `createdate` reciente: la ventana evita despertar leads viejos el dia
+   *   que se prenda esto por primera vez.
+   */
+  async buscarDealsSinCotizar(desde: Date, limite: number): Promise<Array<{ id: string; properties: Record<string, string | null> }>> {
+    const props = loadHubspotProperties().properties;
+    if (!props.estado) {
+      throw new Error(
+        'El barrido necesita la propiedad "estado" mapeada en config/hubspot-properties.json: es como sabe que Deal falta cotizar.',
+      );
+    }
+
+    const response = await got.post(`${this.baseUrl}/crm/v3/objects/deals/search`, {
+      headers: this.authHeaders(),
+      json: {
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: props.estado, operator: "NOT_HAS_PROPERTY" },
+              { propertyName: "marca_vehiculo", operator: "HAS_PROPERTY" },
+              { propertyName: "createdate", operator: "GTE", value: String(desde.getTime()) },
+            ],
+          },
+        ],
+        sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
+        properties: PROPIEDADES_DE_DEAL,
+        limit: limite,
+      },
+      throwHttpErrors: false,
+      timeout: { request: 20_000 },
+    });
+    if (response.statusCode >= 400) {
+      throw new Error(`HubSpot rechazo la busqueda de Deals sin cotizar (status ${response.statusCode}): ${response.body.slice(0, 400)}`);
+    }
+    const parsed = JSON.parse(response.body) as { results?: Array<{ id: string; properties: Record<string, string | null> }> };
+    return parsed.results ?? [];
+  }
+
+  /**
+   * El Contact asociado al Deal. Devuelve `undefined` si no hay ninguno: el
+   * lead no se puede cotizar sin el (ahi viven DNI, fecha de nacimiento, sexo
+   * y codigo postal), pero eso lo decide el llamador.
+   */
+  async contactoDeDeal(dealId: string): Promise<string | undefined> {
+    const parsed = await this.getJson<{ results?: Array<{ toObjectId: string | number }> }>(
+      `/crm/v4/objects/deals/${encodeURIComponent(dealId)}/associations/contacts`,
+      `las asociaciones del Deal ${dealId}`,
+    );
+    const primero = parsed.results?.[0]?.toObjectId;
+    return primero === undefined ? undefined : String(primero);
+  }
+
+  /**
+   * Propiedades del Contact.
+   *
+   * OJO: se piden EXPLICITAMENTE. Pedir el contacto sin `?properties=` hace
+   * que HubSpot devuelva las default y, si el portal tiene alguna marcada como
+   * sensible, rechaza la llamada entera pidiendo
+   * `crm.objects.contacts.sensitive.read.v2` — con la lista explicita anda con
+   * el `crm.objects.contacts.read` de siempre.
+   */
+  async leerContacto(contactId: string): Promise<Record<string, string | null>> {
+    const parsed = await this.getJson<{ properties?: Record<string, string | null> }>(
+      `/crm/v3/objects/contacts/${encodeURIComponent(contactId)}?properties=${PROPIEDADES_DE_CONTACT.join(",")}`,
+      `la lectura del Contact ${contactId}`,
+    );
+    return parsed.properties ?? {};
   }
 
   /** PATCH de propiedades sobre un Deal EXISTENTE (no lo crea). */

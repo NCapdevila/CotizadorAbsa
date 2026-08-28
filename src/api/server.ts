@@ -20,6 +20,7 @@ import { isValidWebhookSecret } from "../integrations/hubspot/webhookAuth.js";
 import { hubspotLeadWebhookSchema } from "../integrations/hubspot/webhookSchema.js";
 import { HubspotClient } from "../integrations/hubspot/client.js";
 import { enProcesoDealProperties } from "../integrations/hubspot/mapper.js";
+import { LeadSweeper } from "../integrations/hubspot/leadSweeper.js";
 
 const app = express();
 app.use(express.json());
@@ -38,6 +39,15 @@ if (hubspotEnabled) {
   const hubspotClient = new HubspotClient();
   const leadWorker = createDefaultLeadWorker(leadQueue);
   leadWorker.start();
+
+  // Red de seguridad para los leads cuyo webhook no llega. Comparte la MISMA
+  // JobQueue que el webhook, que es lo que evita cotizar dos veces el mismo
+  // Deal. Apagado por default: ver HUBSPOT_BARRIDO en src/config.ts.
+  if (config.HUBSPOT_BARRIDO) {
+    new LeadSweeper({ queue: leadQueue }).start();
+  } else {
+    logger.info("Barrido de Deals sin cotizar apagado (HUBSPOT_BARRIDO). Los leads dependen solo del webhook.");
+  }
 
   app.post("/webhooks/hubspot/absa", async (req: Request, res: Response) => {
     // Se loguea ANTES de validar nada. Sin esta linea no habia forma de

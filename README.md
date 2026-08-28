@@ -114,6 +114,11 @@ npm install
 | `QUEUE_STORE_PATH` | no | `.queue/leads.json` | Cola de leads pendientes (contiene PII — gitignored) |
 | `QUEUE_POLL_INTERVAL_MS` | no | `15000` | Cada cuánto el worker busca trabajo |
 | `QUEUE_MAX_ATTEMPTS` | no | `3` | Reintentos por lead antes de marcarlo fallido |
+| `HUBSPOT_BARRIDO` | no | `false` | `true`/`false`. Barrido de rescate: busca en HubSpot Deals sin cotizar y los encola, para los leads cuyo webhook nunca llegó |
+| `HUBSPOT_BARRIDO_SIMULACRO` | no | `false` | `true`/`false`. Loguea qué encolaría y no encola nada. **Usalo en la primera pasada** |
+| `HUBSPOT_BARRIDO_INTERVAL_MS` | no | `600000` | Cada cuánto barre (10 min) |
+| `HUBSPOT_BARRIDO_HORAS` | no | `24` | Cuántas horas hacia atrás mira. Evita despertar leads viejos el día que se prenda |
+| `HUBSPOT_BARRIDO_MAX` | no | `25` | Tope de Deals por pasada |
 
 ### Archivos de config (no están en el repo)
 
