@@ -93,6 +93,20 @@ const envSchema = z.object({
   HUBSPOT_BARRIDO_ZONA: z.string().default("America/Argentina/Buenos_Aires"),
   /** Tope de Deals por pasada: un techo al daño si el filtro trae de mas. */
   HUBSPOT_BARRIDO_MAX: z.coerce.number().int().positive().default(25),
+  /**
+   * Que valor de `tipo_riesgo` levanta el barrido.
+   *
+   * "AUTO" no es una preferencia: es lo unico que este servicio sabe cotizar.
+   * Todo el camino esta clavado en `ID_RIESGO_AUTO = 9`
+   * (src/quote/absaCatalogClient.ts), asi que una MOTO buscada en el catalogo
+   * de autos no encuentra nada y el lead termina como
+   * "error_catalogo_no_resuelto" — un error que no dice la verdad y que
+   * ademas escribe sobre un Deal que alguien puede estar trabajando a mano.
+   * Medido el 2026-08-28: de 73 Deals del dia, 70 AUTO y 3 MOTO.
+   *
+   * Vacio = sin filtro (levanta cualquier riesgo).
+   */
+  HUBSPOT_BARRIDO_TIPO_RIESGO: z.string().default("AUTO"),
   HUBSPOT_PROPERTIES_PATH: z.string().default("config/hubspot-properties.json"),
   /**
    * Si se adjunta al Deal el PDF de la cotizacion (la impresion de ABSA).

@@ -121,6 +121,7 @@ npm install
 | `HUBSPOT_BARRIDO_SOLO_HOY` | no | `true` | `true`/`false`. Además de las horas, no pasar del comienzo del día de hoy: **de ayer para atrás no se toca** |
 | `HUBSPOT_BARRIDO_ZONA` | no | `America/Argentina/Buenos_Aires` | Con qué zona horaria se decide dónde empieza "hoy" |
 | `HUBSPOT_BARRIDO_MAX` | no | `25` | Tope de Deals por pasada |
+| `HUBSPOT_BARRIDO_TIPO_RIESGO` | no | `AUTO` | Qué `tipo_riesgo` levanta. Este servicio solo cotiza autos; las MOTO se dejan afuera. Vacío = cualquiera |
 
 ### Archivos de config (no están en el repo)
 

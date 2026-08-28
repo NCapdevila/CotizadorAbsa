@@ -59,6 +59,8 @@ export interface LeadSweeperDeps {
   soloHoy?: boolean;
   zona?: string;
   maxPorPasada?: number;
+  /** Valor de `tipo_riesgo` que se levanta. Vacio = cualquiera. */
+  tipoRiesgo?: string;
   /** Loguea lo que encolaria y no encola nada. Para la primera puesta en marcha. */
   simulacro?: boolean;
 }
@@ -71,6 +73,7 @@ export class LeadSweeper {
   private readonly soloHoy: boolean;
   private readonly zona: string;
   private readonly maxPorPasada: number;
+  private readonly tipoRiesgo: string;
   private readonly simulacro: boolean;
   private timer: ReturnType<typeof setInterval> | null = null;
   private corriendo = false;
@@ -83,6 +86,7 @@ export class LeadSweeper {
     this.soloHoy = deps.soloHoy ?? config.HUBSPOT_BARRIDO_SOLO_HOY;
     this.zona = deps.zona ?? config.HUBSPOT_BARRIDO_ZONA;
     this.maxPorPasada = deps.maxPorPasada ?? config.HUBSPOT_BARRIDO_MAX;
+    this.tipoRiesgo = deps.tipoRiesgo ?? config.HUBSPOT_BARRIDO_TIPO_RIESGO;
     this.simulacro = deps.simulacro ?? config.HUBSPOT_BARRIDO_SIMULACRO;
   }
 
@@ -94,6 +98,7 @@ export class LeadSweeper {
         horasHaciaAtras: this.horasHaciaAtras,
         soloHoy: this.soloHoy,
         maxPorPasada: this.maxPorPasada,
+        tipoRiesgo: this.tipoRiesgo || "(cualquiera)",
         simulacro: this.simulacro,
       },
       this.simulacro
@@ -124,7 +129,7 @@ export class LeadSweeper {
     this.corriendo = true;
     try {
       const desde = this.desdeCuando();
-      const deals = await this.hubspot.buscarDealsSinCotizar(desde, this.maxPorPasada);
+      const deals = await this.hubspot.buscarDealsSinCotizar(desde, this.maxPorPasada, this.tipoRiesgo);
       if (deals.length === 0) return { encontrados: 0, encolados: 0 };
 
       logger.warn(

@@ -64,8 +64,15 @@ export class HubspotClient {
    *   cotizacion de autos. Sin esto el barrido levanta cualquier Deal.
    * - `createdate` reciente: la ventana evita despertar leads viejos el dia
    *   que se prenda esto por primera vez.
+   * - `tipo_riesgo`: este servicio solo cotiza AUTO. Una MOTO buscada en el
+   *   catalogo de autos no encuentra nada y el lead muere como
+   *   "error_catalogo_no_resuelto", que no es lo que paso.
    */
-  async buscarDealsSinCotizar(desde: Date, limite: number): Promise<Array<{ id: string; properties: Record<string, string | null> }>> {
+  async buscarDealsSinCotizar(
+    desde: Date,
+    limite: number,
+    tipoRiesgo?: string,
+  ): Promise<Array<{ id: string; properties: Record<string, string | null> }>> {
     const props = loadHubspotProperties().properties;
     if (!props.estado) {
       throw new Error(
@@ -82,6 +89,7 @@ export class HubspotClient {
               { propertyName: props.estado, operator: "NOT_HAS_PROPERTY" },
               { propertyName: "marca_vehiculo", operator: "HAS_PROPERTY" },
               { propertyName: "createdate", operator: "GTE", value: String(desde.getTime()) },
+              ...(tipoRiesgo ? [{ propertyName: "tipo_riesgo", operator: "EQ", value: tipoRiesgo }] : []),
             ],
           },
         ],

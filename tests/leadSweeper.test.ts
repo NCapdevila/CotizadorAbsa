@@ -209,3 +209,39 @@ describe("LeadSweeper: ventana", () => {
     expect(Math.abs(pedido!.getTime() - esperado)).toBeLessThan(5000);
   });
 });
+
+/**
+ * El servicio esta clavado en ID_RIESGO_AUTO = 9: una MOTO buscada en el
+ * catalogo de autos no encuentra nada y el lead muere como
+ * "error_catalogo_no_resuelto", que no es lo que paso. Medido el 2026-08-28:
+ * de 73 Deals del dia, 3 eran MOTO.
+ */
+describe("LeadSweeper: tipo de riesgo", () => {
+  function espia(overrides = {}) {
+    const pedidos: Array<string | undefined> = [];
+    const hubspot = stubHubspot({
+      buscarDealsSinCotizar: async (_desde: Date, _limite: number, tipoRiesgo?: string) => {
+        pedidos.push(tipoRiesgo);
+        return [];
+      },
+      ...overrides,
+    });
+    return { hubspot, pedidos };
+  }
+
+  function colaTemporal() {
+    return new JobQueue(path.join(os.tmpdir(), `absa-riesgo-${Date.now()}-${Math.random()}.json`));
+  }
+
+  it("solo pide los AUTO", async () => {
+    const { hubspot, pedidos } = espia();
+    await new LeadSweeper({ queue: colaTemporal(), hubspotClient: hubspot as never, tipoRiesgo: "AUTO" }).runOnce();
+    expect(pedidos).toEqual(["AUTO"]);
+  });
+
+  it("vacio significa sin filtro, para el dia que se cotice otra cosa", async () => {
+    const { hubspot, pedidos } = espia();
+    await new LeadSweeper({ queue: colaTemporal(), hubspotClient: hubspot as never, tipoRiesgo: "" }).runOnce();
+    expect(pedidos).toEqual([""]);
+  });
+});
