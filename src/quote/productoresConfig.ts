@@ -2,7 +2,12 @@ import fs from "node:fs";
 import { z } from "zod";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { normalizarProductor, rankearProductores } from "./productorMatch.js";
+import {
+  consultasDeProductor,
+  normalizarProductor,
+  rankearProductores,
+  type CandidatoProductor,
+} from "./productorMatch.js";
 
 /**
  * Mapeo entre la lista CERRADA de productores del formulario y los IDs reales
@@ -174,7 +179,102 @@ export function resolverProductor(valor: string | undefined): ProductorMapeado |
   return defecto;
 }
 
+/**
+ * Busca en el catalogo REAL de ABSA (`/Combo/GetProductoresIncremental`).
+ * Se inyecta para poder testear la regla de decision sin una sesion viva.
+ */
+export type BuscadorDeProductores = (query: string) => Promise<CandidatoProductor[]>;
+
+/** Lo ya resuelto contra ABSA en este proceso: un productor del formulario se repite en cada lead. */
+const resueltosEnAbsa = new Map<string, ProductorMapeado | null>();
+
+/**
+ * El valor del formulario -> productor de ABSA, con el catalogo en vivo como
+ * segunda oportunidad.
+ *
+ * Orden: mapeo exacto (instantaneo y exacto por construccion) -> busqueda en
+ * ABSA -> productor por defecto. La busqueda existe porque el mapeo se arma a
+ * mano y siempre va atrasado: cuando entra una concesionaria nueva al
+ * formulario, sus leads cotizaban con ARDAMA hasta que alguien se acordara de
+ * agregarla (caso real: "NFR MOTORS", que existe en ABSA con id 11795).
+ *
+ * **Solo se acepta un match INEQUIVOCO**: exactamente un candidato al 100%.
+ * No es una formalidad, es lo unico que hace segura esta busqueda — errarle al
+ * productor no da un error, da precios de otro acuerdo comercial sin ningun
+ * sintoma. Los numeros reales de ABSA muestran por que el umbral es ese:
+ *
+ *   "NFR MOTORS" -> 1 al 100%   -> NFR MOTORS (11795)           se acepta
+ *   "Car West"   -> 2 al 100%   -> CAR WEST C / CAR, WEST M     ambiguo, NO
+ *   "Motors"     -> 36 al 100%                                  ambiguo, NO
+ *
+ * Ante cualquier duda se cae al productor por defecto, que es el
+ * comportamiento de antes. Un match en vivo NO trae los overrides del mapeo
+ * (`campos`): cotiza con lo que ABSA propone por default para ese productor,
+ * que es correcto pero mas caro que con las rebajas negociadas a mano. Por eso
+ * el log pide igual que se agregue la entrada al mapeo.
+ */
+export async function resolverProductorConCatalogo(
+  valor: string | undefined,
+  buscar: BuscadorDeProductores,
+): Promise<ProductorMapeado | undefined> {
+  const pedido = valor?.trim();
+  if (!pedido) return resolverProductor(valor);
+
+  const exacto = buscarProductorMapeado(pedido);
+  if (exacto) return exacto;
+
+  const clave = normalizarProductor(pedido);
+  if (!resueltosEnAbsa.has(clave)) {
+    resueltosEnAbsa.set(clave, await buscarEnAbsa(pedido, buscar));
+  }
+  const enAbsa = resueltosEnAbsa.get(clave);
+  if (enAbsa) return enAbsa;
+
+  // Ni mapeado ni inequivoco en ABSA: el camino de siempre (default + warning).
+  return resolverProductor(valor);
+}
+
+async function buscarEnAbsa(pedido: string, buscar: BuscadorDeProductores): Promise<ProductorMapeado | null> {
+  let candidatos: CandidatoProductor[];
+  try {
+    const vistos = new Map<string, CandidatoProductor>();
+    for (const query of consultasDeProductor(pedido)) {
+      for (const item of await buscar(query)) {
+        if (!vistos.has(item.value)) vistos.set(item.value, item);
+      }
+    }
+    candidatos = [...vistos.values()];
+  } catch (err) {
+    // Que falle la busqueda no puede frenar la cotizacion: se sigue por el
+    // camino de siempre (productor por defecto).
+    logger.warn({ err, productor: pedido }, "No se pudo buscar el productor en el catalogo de ABSA, se sigue con el mapeo");
+    return null;
+  }
+
+  const exactos = rankearProductores(candidatos, pedido).filter((c) => c.similitud === 100);
+  if (exactos.length !== 1) {
+    if (exactos.length > 1) {
+      logger.warn(
+        { productor: pedido, empatados: exactos.slice(0, 4).map((c) => `${c.text} (${c.value})`) },
+        "El productor del lead matchea varios de ABSA por igual: no se elige ninguno (elegir mal = cotizar con otro acuerdo comercial)",
+      );
+    }
+    return null;
+  }
+
+  const elegido = exactos[0]!;
+  const idProductor = Number(elegido.value);
+  if (!Number.isInteger(idProductor) || idProductor <= 0) return null;
+
+  logger.warn(
+    { productor: pedido, idProductor, nombre: elegido.text },
+    "Productor no mapeado pero encontrado en ABSA sin ambiguedad: se cotiza con el suyo. Agregarlo a config/absa-productores.json para poder ponerle rebajas propias",
+  );
+  return { clave: pedido, idProductor, nombre: elegido.text, alias: [] };
+}
+
 /** Solo para tests: fuerza a releer el archivo en la proxima llamada. */
 export function resetProductoresConfigCache(): void {
   cached = undefined;
+  resueltosEnAbsa.clear();
 }

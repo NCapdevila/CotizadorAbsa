@@ -9,7 +9,7 @@ import type { CotizacionInput, CotizacionOpcion, CotizacionResult } from "./type
 import { toAbsaCotizarPayload, toAbsaPropuestaPayload, parseCotizacionPropuestaHtml, tryParseAbsaErrorJson, tryParseAbsaErrores, assertDatosAseguradoCompletos } from "./mapper.js";
 import { loadComercialTemplate, type AbsaComercialTemplate } from "./absaTemplate.js";
 import { AbsaComercialConfigClient } from "./absaComercialClient.js";
-import { resolverProductor } from "./productoresConfig.js";
+import { resolverProductorConCatalogo } from "./productoresConfig.js";
 import { BusinessValidationError, SessionExpiredError, TransientError, UpstreamChangedError } from "./errors.js";
 
 /**
@@ -67,8 +67,32 @@ function esSesionCaida(response: {
 }): boolean {
   const destinos = [response.headers.location ?? "", ...(response.redirectUrls ?? []).map(String)];
   if (destinos.some((destino) => /\/Cuenta\/(UsuarioLogOut|Login)/i.test(destino))) return true;
+  if (cuerpoVacio(response.body)) return true;
   const body = typeof response.body === "string" ? response.body : "";
   return /id=["']loginForm["']|name=["']Password["']/i.test(body);
+}
+
+/**
+ * **200 con el cuerpo vacio** es como ABSA contesta con la sesion vencida en
+ * los endpoints que no redirigen al login. Confirmado en produccion el
+ * 2026-08-28: `GET /AutoCotizador/GuardarCotizacion` devuelve 200, 0 bytes y
+ * sin content-type; con sesion viva devuelve el HTML del modal.
+ *
+ * Sin este chequeo el sintoma era enganioso: la cotizacion salia bien pero el
+ * guardado moria con "No se encontro __RequestVerificationToken en la pagina"
+ * (no hay token en un cuerpo vacio), que no es un SessionExpiredError y por lo
+ * tanto NO disparaba el relogin de `conSesionFresca` — el Deal quedaba con el
+ * link a una cotizacion que nunca se guardo. Es el mismo sintoma que ya
+ * cubria `assertNoEsPaginaDeLogin` del lado del catalogo.
+ *
+ * El tipo del cuerpo importa: la exportacion de PDF pide `responseType:
+ * "buffer"`, asi que ahi `body` es un Buffer y no un string. Tratar "no es
+ * string" como vacio marcaria TODOS los PDFs como sesion caida.
+ */
+function cuerpoVacio(body: unknown): boolean {
+  if (typeof body === "string") return body.trim() === "";
+  if (Buffer.isBuffer(body)) return body.length === 0;
+  return false; // undefined u otra cosa: no alcanza para afirmar que la sesion murio
 }
 
 /**
@@ -180,7 +204,12 @@ export class QuoteClient {
    */
   async templateComercialPara(input: CotizacionInput): Promise<AbsaComercialTemplate> {
     const base = loadComercialTemplate();
-    const entrada = resolverProductor(input.productor);
+    // Con el catalogo de ABSA como segunda oportunidad: si el formulario manda
+    // una concesionaria que todavia no esta en el mapeo pero existe en ABSA sin
+    // ambiguedad, se cotiza con la suya en vez de con el productor por defecto.
+    const entrada = await resolverProductorConCatalogo(input.productor, (query) =>
+      this.comercialClient.buscarProductores(query),
+    );
 
     if (!entrada || entrada.idProductor === base.idProductor) {
       if (input.productor) {

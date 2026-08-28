@@ -253,9 +253,62 @@ describe("QuoteClient: con que productor se cotiza", () => {
     expect(template.camposPorAseguradora["Comercial.RebajaZurich"]).toBe(25);
   });
 
-  it("un productor que no esta en el mapeo cotiza con el de defecto, sin frenar el lead ni pedirle nada a ABSA", async () => {
+  /**
+   * El mapeo se arma a mano y siempre va atrasado: cuando entra una
+   * concesionaria nueva al formulario, sus leads cotizaban con el productor por
+   * defecto hasta que alguien se acordara de agregarla. Caso real del
+   * 2026-08-28: "NFR MOTORS" existe en ABSA (id 11795) y cotizo con ARDAMA.
+   */
+  it("un productor sin mapear pero inequivoco en ABSA cotiza con el suyo", async () => {
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetProductoresIncremental")
+      .query(true)
+      .times(3)
+      .reply(200, { data: { items: [{ value: String(OTRO_PRODUCTOR), text: "NFR MOTORS" }] } });
+    mockConfiguraciones();
+    mockComision();
+    mockCondiciones();
+
+    const template = await quoteClient.templateComercialPara({ ...INPUT, productor: "NFR MOTORS" });
+    expect(template.idProductor).toBe(OTRO_PRODUCTOR);
+  });
+
+  /**
+   * La razon por la que el umbral es "exactamente uno al 100%" y no "el mas
+   * parecido". Con los datos reales de ABSA, "Car West" empata CAR WEST C
+   * (7952) y CAR, WEST M (7953): elegir cualquiera es cotizar con el acuerdo
+   * comercial del de al lado, sin ningun sintoma visible.
+   */
+  it("si varios matchean por igual no elige ninguno: cae al productor por defecto", async () => {
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetProductoresIncremental")
+      .query(true)
+      .times(3)
+      .reply(200, {
+        data: {
+          items: [
+            { value: "7952", text: "CAR WEST C" },
+            { value: "7953", text: "CAR, WEST M" },
+          ],
+        },
+      });
+
+    const template = await quoteClient.templateComercialPara({ ...INPUT, productor: "Car West" });
+    expect(template.idProductor).toBe(loadComercialTemplate().idProductor);
+  });
+
+  it("un productor que no esta ni en el mapeo ni en ABSA cotiza con el de defecto, sin frenar el lead", async () => {
+    nock(config.ABSA_BASE_URL).get("/Combo/GetProductoresIncremental").query(true).times(3).reply(200, { data: { items: [] } });
+
     const template = await quoteClient.templateComercialPara({ ...INPUT, productor: "Autos del Sur" });
     expect(template.idProductor).toBe(loadComercialTemplate().idProductor);
     expect(template.camposPorAseguradora["Comercial.RebajaZurich"]).toBe(30);
+  });
+
+  it("si la busqueda en ABSA falla, el lead no se frena: sigue con el mapeo", async () => {
+    nock(config.ABSA_BASE_URL).get("/Combo/GetProductoresIncremental").query(true).times(3).reply(500, "boom");
+
+    const template = await quoteClient.templateComercialPara({ ...INPUT, productor: "Autos del Sur" });
+    expect(template.idProductor).toBe(loadComercialTemplate().idProductor);
   });
 });

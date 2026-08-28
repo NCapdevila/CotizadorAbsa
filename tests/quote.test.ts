@@ -605,6 +605,28 @@ describe("QuoteClient.guardarCotizacion (flujo real de guardado)", () => {
     expect(authStrategy.loginCalls).toBeGreaterThanOrEqual(2);
   });
 
+  /**
+   * Caso REAL de produccion (cotizacion 41328290, 2026-08-28): la cotizacion
+   * salio bien pero el guardado murio con "No se encontro
+   * __RequestVerificationToken en la pagina". ABSA no contesta 401 ni redirige
+   * al login cuando la sesion vencio en este endpoint: contesta **200 con el
+   * cuerpo vacio** (verificado con un cookie jar vacio). Como no era un
+   * SessionExpiredError, no disparaba el relogin y el Deal quedaba con un link
+   * a una cotizacion que nunca se guardo.
+   */
+  it("200 con el cuerpo vacio es sesion vencida, no un template roto: relogea y guarda", async () => {
+    nock(config.ABSA_BASE_URL).get("/AutoCotizador/GuardarCotizacion").query(true).reply(200, "");
+    nock(config.ABSA_BASE_URL).get("/AutoCotizador/GuardarCotizacion").query(true).reply(200, GUARDAR_FORM_HTML);
+    const post = nock(config.ABSA_BASE_URL)
+      .post("/AutoCotizador/GuardarCotizacion")
+      .reply(200, '<div class="alert alert-success">Guardado</div>');
+
+    const { client, authStrategy } = buildClient(storePath);
+    await client.guardarCotizacion(1, "41319971", "x");
+    expect(post.isDone()).toBe(true);
+    expect(authStrategy.loginCalls).toBeGreaterThanOrEqual(2);
+  });
+
   it("si sigue vencida despues de relogear, lanza SessionExpiredError", async () => {
     nock(config.ABSA_BASE_URL).get("/AutoCotizador/GuardarCotizacion").query(true).twice().reply(401, "");
 
