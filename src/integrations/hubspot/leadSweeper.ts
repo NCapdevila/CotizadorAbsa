@@ -183,7 +183,9 @@ export class LeadSweeper {
         return false;
       }
 
-      const { job, duplicado } = await this.queue.enqueue(payload);
+      // "barrido" y no "webhook": estos ceden el paso a los leads nuevos que
+      // entren mientras se procesa la puesta al dia (ver claimNext).
+      const { job, duplicado } = await this.queue.enqueue(payload, "barrido");
       if (duplicado) {
         logger.info({ dealId, jobId: job.id }, "El barrido encontro un Deal que ya estaba en la cola, no se encola de nuevo");
         return false;

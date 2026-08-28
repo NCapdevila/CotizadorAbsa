@@ -98,3 +98,63 @@ describe("JobQueue", () => {
     expect(new Set(all.map((j) => j.id)).size).toBe(20);
   });
 });
+
+/**
+ * Un lead del webhook es alguien que acaba de cargar el formulario y espera el
+ * precio; uno del barrido es una recuperacion de algo que ya venia perdido.
+ * Con FIFO puro, un barrido de 94 Deals (medido en produccion el 2026-08-28)
+ * dejaba a los leads nuevos esperando hasta 2,5 horas detras de la puesta al dia.
+ */
+describe("JobQueue: prioridad por origen", () => {
+  let storePath: string;
+  let queue: JobQueue;
+
+  beforeEach(() => {
+    storePath = path.join(os.tmpdir(), `absa-prioridad-${Date.now()}-${Math.random()}.json`);
+    queue = new JobQueue(storePath);
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(storePath)) fs.unlinkSync(storePath);
+  });
+
+  it("el webhook se atiende antes que el barrido aunque haya llegado despues", async () => {
+    await queue.enqueue({ dealId: "barrido-1" }, "barrido");
+    await queue.enqueue({ dealId: "barrido-2" }, "barrido");
+    await queue.enqueue({ dealId: "del-form" }, "webhook");
+
+    expect((await queue.claimNext())?.payload.dealId).toBe("del-form");
+  });
+
+  it("dentro de cada prioridad manda el orden de llegada: el barrido no se muere de hambre", async () => {
+    await queue.enqueue({ dealId: "barrido-1" }, "barrido");
+    await queue.enqueue({ dealId: "barrido-2" }, "barrido");
+    await queue.enqueue({ dealId: "del-form" }, "webhook");
+
+    const orden: Array<string | undefined> = [];
+    for (let i = 0; i < 3; i++) orden.push((await queue.claimNext())?.payload.dealId);
+    expect(orden).toEqual(["del-form", "barrido-1", "barrido-2"]);
+  });
+
+  it("por default se encola como webhook (el llamador de siempre no cambia)", async () => {
+    const { job } = await queue.enqueue({ dealId: "x" });
+    expect(job.origen).toBe("webhook");
+  });
+
+  it("un job sin origen (encolado antes de que existiera el barrido) tiene prioridad de webhook", async () => {
+    await queue.enqueue({ dealId: "barrido-1" }, "barrido");
+    // Se simula un job viejo escribiendo el archivo a mano, sin `origen`.
+    const jobs = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    jobs.push({
+      id: "viejo",
+      status: "pending",
+      payload: { dealId: "job-viejo" },
+      attempts: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    fs.writeFileSync(storePath, JSON.stringify(jobs));
+
+    expect((await queue.claimNext())?.payload.dealId).toBe("job-viejo");
+  });
+});

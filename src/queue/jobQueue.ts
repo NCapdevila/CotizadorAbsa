@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { HubspotLeadWebhookPayload, QueueJob } from "../integrations/hubspot/types.js";
+import type { HubspotLeadWebhookPayload, QueueJob, QueueJobOrigen } from "../integrations/hubspot/types.js";
 import { logger } from "../logger.js";
 
 /**
@@ -68,11 +68,15 @@ export class JobQueue {
    * Un Deal ya cotizado (job "done") SI se puede volver a encolar: es el caso
    * legitimo de recotizar porque cambiaron los datos.
    */
-  async enqueue(payload: HubspotLeadWebhookPayload): Promise<{ job: QueueJob; duplicado: boolean }> {
+  async enqueue(
+    payload: HubspotLeadWebhookPayload,
+    origen: QueueJobOrigen = "webhook",
+  ): Promise<{ job: QueueJob; duplicado: boolean }> {
     const now = new Date().toISOString();
     const job: QueueJob = {
       id: crypto.randomUUID(),
       status: "pending",
+      origen,
       payload,
       attempts: 0,
       createdAt: now,
@@ -87,10 +91,25 @@ export class JobQueue {
     });
   }
 
-  /** Toma el proximo job "pending" mas viejo y lo marca "processing" (para que no lo agarre otra pasada del worker). */
+  /**
+   * Toma el proximo job "pending" y lo marca "processing" (para que no lo
+   * agarre otra pasada del worker).
+   *
+   * Los del WEBHOOK van primero. No es un detalle de eficiencia: un lead del
+   * webhook es alguien que acaba de cargar el formulario y esta esperando el
+   * precio, mientras que uno del barrido es una recuperacion de algo que ya
+   * venia perdido. Con FIFO puro, un barrido de 94 Deals (medido en
+   * produccion) dejaba a los leads nuevos esperando hasta 2,5 horas detras de
+   * la puesta al dia.
+   *
+   * Dentro de cada prioridad se respeta el orden de llegada: el barrido no se
+   * muere de hambre, solo cede el paso.
+   */
   async claimNext(): Promise<QueueJob | null> {
     return this.withLock((jobs) => {
-      const next = jobs.find((j) => j.status === "pending");
+      const pendientes = jobs.filter((j) => j.status === "pending");
+      // `origen` ausente = job viejo, de cuando solo existia el webhook.
+      const next = pendientes.find((j) => (j.origen ?? "webhook") !== "barrido") ?? pendientes[0];
       if (!next) return { jobs, result: null };
       const claimed: QueueJob = { ...next, status: "processing", updatedAt: new Date().toISOString() };
       return { jobs: jobs.map((j) => (j.id === claimed.id ? claimed : j)), result: claimed };

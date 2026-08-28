@@ -73,9 +73,21 @@ export interface HubspotLeadWebhookPayload {
 /** Job tal como vive en la cola persistida (ver src/queue/jobQueue.ts). */
 export type QueueJobStatus = "pending" | "processing" | "done" | "failed";
 
+/**
+ * De donde salio el job. Define la prioridad con la que se atiende (ver
+ * `JobQueue.claimNext`): un lead del webhook es alguien que acaba de cargar el
+ * formulario y esta esperando el precio; uno del barrido ya venia perdido.
+ */
+export type QueueJobOrigen = "webhook" | "barrido";
+
 export interface QueueJob {
   id: string;
   status: QueueJobStatus;
+  /**
+   * Ausente en los jobs encolados antes de que existiera el barrido: se
+   * tratan como "webhook", que es lo que eran.
+   */
+  origen?: QueueJobOrigen;
   payload: HubspotLeadWebhookPayload;
   attempts: number;
   createdAt: string; // ISO
