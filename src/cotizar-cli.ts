@@ -72,8 +72,9 @@ Opcionales:
   --localidad "<nombre>"     Localidad del riesgo (ej. Claypole). Un CP cubre
                              muchas y ABSA las lista alfabeticamente: con el
                              nombre se elige la correcta en vez de la primera.
-  --provincia <id>           Fuerza el ID de provincia. No hace falta: sale del
-                             codigo postal, igual que en el portal.
+  --provincia <id>           Ultima carta si el CP no resuelve provincia. Casi
+                             nunca hace falta: sale del codigo postal, que gana
+                             siempre aunque este flag lo contradiga.
   --descripcion "<texto>"    Nombre con el que se guarda la cotizacion en ABSA
                              (default: vehiculo - patente - titular - documento)
   --sin-guardar              Cotiza pero NO deja la cotizacion guardada en ABSA
@@ -118,8 +119,9 @@ async function main() {
       estadoCivil: Number(args["estadocivil"]) as CotizacionInput["asegurado"]["estadoCivil"],
       codigoPostal: args["cp"],
       localidad: args["localidad"],
-      // Sin default: la provincia sale del codigo postal (ver resolveLocalidad).
-      // --provincia queda solo para forzar un ID a mano.
+      // Sin default: la provincia sale del codigo postal (ver resolveLocalidad),
+      // que le gana a este flag. --provincia solo se usa si el CP no resolvio
+      // ninguna (ver resolveIdProvincia en ./quote/mapper.ts).
       provincia: args["provincia"],
     },
     objetoAsegurado: {

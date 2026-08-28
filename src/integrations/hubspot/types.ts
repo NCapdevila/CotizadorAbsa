@@ -36,9 +36,12 @@ export interface HubspotLeadWebhookPayload {
   estado_civil?: string | number;
   telefono?: string;
   /**
-   * NO hace falta mandarla: la provincia sale del codigo postal
-   * (`/Localidad/GetLocalidad`), igual que en el portal. Si viene, solo se
-   * respeta cuando es un ID numerico de ABSA; un nombre ("Cordoba") se ignora.
+   * NO la mandes: la provincia sale del codigo postal
+   * (`/Localidad/GetLocalidad`), igual que en el portal, y **el CP gana
+   * siempre**. Lo que venga aca se descarta cuando el CP resolvio una, sea un
+   * nombre ("Cordoba", "BA") o un ID que no coincide — mandar una provincia
+   * que contradice a la localidad hace que ABSA cotice la zona equivocada.
+   * Solo se usa, y solo si es un ID numerico, cuando el CP no resolvio nada.
    */
   provincia?: string;
   localidad?: string;

@@ -476,13 +476,57 @@ describe("toAbsaCotizarPayload: provincia del riesgo", () => {
     expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("4");
   });
 
-  it("un ID pasado a mano gana, como escotilla", () => {
+  it("el codigo postal le gana a un ID pasado a mano que lo contradice", () => {
+    // Regla de negocio: el CP es el unico dato de domicilio que el cliente
+    // escribe bien. Mandar la provincia del formulario junto a la localidad
+    // del CP le daria a ABSA un par incoherente (localidad de una provincia,
+    // provincia de otra): cotiza con la zona equivocada o rechaza.
     const p = toAbsaCotizarPayload(
       { ...SAMPLE_INPUT, asegurado: { ...SAMPLE_INPUT.asegurado, provincia: "13" }, absa: { ...SAMPLE_INPUT.absa!, idProvincia: 4 } },
       template,
       "token",
     );
+    expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("4");
+  });
+
+  it("si coinciden no hay nada que decidir", () => {
+    const p = toAbsaCotizarPayload(
+      { ...SAMPLE_INPUT, asegurado: { ...SAMPLE_INPUT.asegurado, provincia: "4" }, absa: { ...SAMPLE_INPUT.absa!, idProvincia: 4 } },
+      template,
+      "token",
+    );
+    expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("4");
+  });
+
+  it("'BA' o cualquier texto tampoco pisa la del codigo postal", () => {
+    for (const provincia of ["ba", "BA", "Buenos Aires", "  "]) {
+      const p = toAbsaCotizarPayload(
+        { ...SAMPLE_INPUT, asegurado: { ...SAMPLE_INPUT.asegurado, provincia }, absa: { ...SAMPLE_INPUT.absa!, idProvincia: 1 } },
+        template,
+        "token",
+      );
+      expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("1");
+    }
+  });
+
+  it("si el CP no resolvio provincia, el ID del lead es la ultima carta", () => {
+    const { idProvincia, ...absaSinProvincia } = SAMPLE_INPUT.absa!;
+    const p = toAbsaCotizarPayload(
+      { ...SAMPLE_INPUT, asegurado: { ...SAMPLE_INPUT.asegurado, provincia: "13" }, absa: absaSinProvincia },
+      template,
+      "token",
+    );
     expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("13");
+  });
+
+  it("si el CP no resolvio provincia y la del lead es un nombre, va vacio", () => {
+    const { idProvincia, ...absaSinProvincia } = SAMPLE_INPUT.absa!;
+    const p = toAbsaCotizarPayload(
+      { ...SAMPLE_INPUT, asegurado: { ...SAMPLE_INPUT.asegurado, provincia: "Cordoba" }, absa: absaSinProvincia },
+      template,
+      "token",
+    );
+    expect(p.get("DomicilioRiesgo.id_Provincia")).toBe("");
   });
 
   it("un NOMBRE de provincia se ignora: es lo que manda un formulario y ABSA espera un ID", () => {

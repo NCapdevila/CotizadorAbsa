@@ -90,22 +90,51 @@ export function assertDatosAseguradoCompletos(input: CotizacionInput): void {
  * es la provincia que el resolver saco del codigo postal
  * (`/Localidad/GetLocalidad`).
  *
- * `asegurado.provincia` solo se respeta si es un ID numerico, como escotilla
- * para forzarla a mano. Un nombre ("Cordoba", "Buenos Aires") se ignora a
- * proposito: es lo que suele mandar un formulario, y mandarlo tal cual no da un
- * error claro, da una cotizacion con la provincia en blanco o rechazada.
+ * **El codigo postal gana siempre.** Lo que venga en `asegurado.provincia` se
+ * descarta cuando el CP ya resolvio una, sea un nombre ("Cordoba", "BA") o un
+ * ID numerico que no coincide. Es una decision de negocio: el CP es el unico
+ * dato de domicilio que el cliente escribe bien, mientras que la provincia sale
+ * de un combo del formulario que puede estar desactualizado o mal elegido, y
+ * mandar una provincia que contradice a la localidad es peor que ignorarla
+ * — ABSA recibiria un par incoherente (localidad de CABA + provincia Buenos
+ * Aires) y cotizaria con la zona equivocada o rechazaria la cotizacion.
+ *
+ * `asegurado.provincia` queda como ULTIMA carta: solo se usa, y solo si es un
+ * ID numerico, cuando el codigo postal no resolvio ninguna provincia.
+ *
+ * Es el mismo criterio que `elegirLocalidad()` (src/quote/absaCatalogClient.ts)
+ * aplica a la localidad: si la que mando el formulario no se parece a ninguna
+ * de las del CP, se toma la primera del CP y se avisa.
  */
 function resolveIdProvincia(input: CotizacionInput): string {
   const pedida = input.asegurado.provincia?.trim();
-  if (pedida && /^\d+$/.test(pedida)) return pedida;
+  const delCodigoPostal = input.absa?.idProvincia;
 
+  if (delCodigoPostal !== undefined) {
+    if (pedida && pedida !== String(delCodigoPostal)) {
+      logger.warn(
+        { provincia: pedida, idProvincia: delCodigoPostal, idLocalidad: input.absa?.idLocalidad },
+        "La provincia del lead no coincide con la del codigo postal: se ignora y manda la del CP",
+      );
+    }
+    return String(delCodigoPostal);
+  }
+
+  // Sin provincia del CP: es esto o mandar vacio y que ABSA rechace.
+  if (pedida && /^\d+$/.test(pedida)) {
+    logger.warn(
+      { provincia: pedida },
+      "El codigo postal no resolvio provincia: se usa el ID que vino en el lead",
+    );
+    return pedida;
+  }
   if (pedida) {
     logger.warn(
-      { provincia: pedida, idProvincia: input.absa?.idProvincia },
-      "asegurado.provincia no es un ID numerico: se ignora y se usa la provincia que salio del codigo postal",
+      { provincia: pedida },
+      "El codigo postal no resolvio provincia y la del lead no es un ID numerico: se cotiza sin provincia",
     );
   }
-  return String(input.absa?.idProvincia ?? "");
+  return "";
 }
 
 /**
