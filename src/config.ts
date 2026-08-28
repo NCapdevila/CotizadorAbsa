@@ -56,10 +56,18 @@ const envSchema = z.object({
    * Barrido de rescate: busca en HubSpot Deals sin cotizar y los encola, para
    * los leads cuyo webhook nunca llego (ver src/integrations/hubspot/leadSweeper.ts).
    *
-   * APAGADO por default a proposito: prenderlo hace que el servicio empiece a
-   * cotizar Deals por su cuenta, y conviene mirar una pasada en simulacro antes.
+   * PRENDIDO por default. Es la decision correcta aunque signifique que el
+   * servicio cotice por su cuenta: el webhook es un push sin garantia y cuando
+   * falla el lead no se recupera nunca — un simulacro contra produccion el
+   * 2026-08-28 encontro 25 Deals sin cotizar en 24h (el tope de la pasada, o
+   * sea que habia mas). Un barrido apagado "hasta que alguien lo prenda" es un
+   * barrido que no corre el dia que hace falta.
+   *
+   * Los techos al daño no son este flag sino la ventana (BARRIDO_HORAS), el
+   * tope por pasada (BARRIDO_MAX) y el filtro por `absa_estado` sin valor, que
+   * deja afuera todo lo ya atendido.
    */
-  HUBSPOT_BARRIDO: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  HUBSPOT_BARRIDO: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   /** Simulacro: loguea que Deals encolaria y no encola ninguno. */
   HUBSPOT_BARRIDO_SIMULACRO: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   HUBSPOT_BARRIDO_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),

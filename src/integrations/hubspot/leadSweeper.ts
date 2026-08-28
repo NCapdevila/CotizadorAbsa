@@ -68,9 +68,17 @@ export class LeadSweeper {
         ? "Barrido de Deals sin cotizar arrancado EN SIMULACRO: loguea lo que encolaria, no encola nada"
         : "Barrido de Deals sin cotizar arrancado",
     );
-    this.timer = setInterval(() => {
-      this.runOnce().catch((err) => logger.error({ err }, "Error inesperado en el barrido de Deals"));
-    }, this.intervalMs);
+    const pasada = () => this.runOnce().catch((err) => logger.error({ err }, "Error inesperado en el barrido de Deals"));
+
+    // Una pasada al arrancar y despues cada intervalo. Arrancar barriendo es
+    // deliberado: si el servicio estuvo caido, los leads que se perdieron
+    // mientras tanto son justo los que hay que recuperar, y esperar diez
+    // minutos para empezar a hacerlo no tiene sentido. Repetirla en cada
+    // reinicio no molesta: el filtro por `absa_estado` sin valor y la
+    // deduplicacion de la cola hacen que una pasada sin nada nuevo no haga
+    // nada.
+    void pasada();
+    this.timer = setInterval(pasada, this.intervalMs);
   }
 
   stop(): void {
