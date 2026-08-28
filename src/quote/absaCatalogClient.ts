@@ -9,6 +9,8 @@ import type { AbsaEntityIds, AbsaEntityResolver } from "./vehicleCatalog.js";
 import { rankearLocalidades, type CandidatoLocalidad } from "./localidadMatch.js";
 import {
   consultasDeBusqueda,
+  consultasDeRescate,
+  esDelModeloPedido,
   hayVersionEnLaBusqueda,
   rankearCandidatos,
   textoBuscado,
@@ -298,7 +300,58 @@ export class AbsaHttpVehicleCatalogResolver implements AbsaEntityResolver {
       }
     }
 
-    return rankearCandidatos([...porInfoAuto.values()], vehiculo);
+    // Solo la VERSION se elige por parecido: marca, modelo y año tienen que
+    // ser exactos. Por eso los candidatos de otro modelo se descartan antes de
+    // rankear (el año lo chequea despues `intentarResolver`, candidato por
+    // candidato, contra GetAniosVehiculo).
+    const rankear = () => rankearCandidatos([...porInfoAuto.values()].filter((c) => esDelModeloPedido(c, vehiculo)), vehiculo);
+
+    let ranking = rankear();
+
+    // Rescate con una consulta mas amplia. Dos motivos para entrar:
+    //
+    //  - No vino NADA: el lead moriria como "catalogo no resuelto" aunque el
+    //    auto exista en ABSA, porque el formulario escribio algo que ABSA no
+    //    escribe igual y el AND de substrings se quedo sin nada.
+    //  - Vino algo pero se parece poco: pasa cuando la consulta amplia quedo
+    //    demasiado pegada al texto del formulario y devolvio dos o tres
+    //    parientes lejanos (real: "C3 VTI 115 AT6 FEEL" traia un C-ELYSEE al
+    //    2%). Cotizar ESO es peor que no cotizar: da una prima creible del
+    //    auto equivocado.
+    //
+    // Es seguro entrar de mas: los candidatos se UNEN a los que ya habia y se
+    // vuelve a rankear todo junto, asi que el resultado solo puede mejorar o
+    // quedar igual. El costo es una request extra en un flujo que tarda
+    // minutos, y solo cuando ya sabemos que lo que tenemos no sirve.
+    const seEligioPorParecido = hayVersionEnLaBusqueda(vehiculo);
+    const flojo = seEligioPorParecido && (ranking[0]?.similitud ?? 0) < SIMILITUD_ACEPTABLE;
+
+    // El disparador mira los candidatos DEL MODELO, no el pool crudo: que
+    // ABSA haya devuelto 30 autos no sirve de nada si ninguno es el modelo.
+    if (ranking.length === 0 || flojo) {
+      for (const q of consultasDeRescate(vehiculo)) {
+        const antes = ranking[0]?.similitud;
+        const items = await this.getCombo(jar, headers, "/Combo/GetVehiculos", { q, sumaAseguradaMinima: "0" });
+        for (const item of items) {
+          if (!porInfoAuto.has(item.value)) porInfoAuto.set(item.value, item);
+        }
+        ranking = rankear();
+
+        if (ranking.length > 0) {
+          const ahora = ranking[0]!.similitud;
+          logger.warn(
+            { pedido: textoBuscado(vehiculo), rescate: q, candidatosDelModelo: ranking.length, similitudAntes: antes, similitudAhora: ahora },
+            "Las consultas normales no alcanzaron: se busco mas amplio. Revisar el parecido de la version elegida.",
+          );
+          // Corta si ya alcanza, o si ampliar dejo de mejorar: cuando una
+          // consulta mas amplia no sube el parecido, la siguiente (todavia mas
+          // amplia) tampoco lo va a subir — solo agrega ruido y una request.
+          if (!seEligioPorParecido || ahora >= SIMILITUD_ACEPTABLE || (antes !== undefined && ahora <= antes)) break;
+        }
+      }
+    }
+
+    return ranking;
   }
 
   private async getCombo(

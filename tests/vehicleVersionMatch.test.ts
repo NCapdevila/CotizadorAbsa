@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   consultasDeBusqueda,
+  consultasDeRescate,
+  esDelModeloPedido,
+  tokensDeModelo,
   hayVersionEnLaBusqueda,
   normalizarDescripcion,
   rankearCandidatos,
@@ -182,5 +185,126 @@ describe("consultasDeBusqueda", () => {
 
   it("sin version hace una sola consulta (no gasta requests de mas contra ABSA)", () => {
     expect(consultasDeBusqueda({ marca: "FIAT", modelo: "ARGO", anio: 2022 })).toEqual(["FIAT ARGO"]);
+  });
+});
+
+/**
+ * Casos REALES que fallaron en produccion como "catalogo no resuelto" el
+ * 2026-08-28 (sacados de los Deals de HubSpot y de los logs de pm2). Todos
+ * tienen la misma causa: el formulario mete la descripcion entera en
+ * `modelo_vehiculo` y ahi viajan palabras que ABSA no escribe igual. Como
+ * `/Combo/GetVehiculos` es un AND de substrings, una sola alcanza para que la
+ * consulta vuelva vacia y el lead muera sin cotizar.
+ *
+ * Las consultas de abajo estan verificadas contra ABSA net real: la cantidad
+ * de items que devuelve cada una esta en el comentario.
+ */
+describe("consultasDeBusqueda: casos reales que morian como catalogo no resuelto", () => {
+  it("saca la cantidad de puertas, que ABSA escribe distinto o no escribe", () => {
+    // "CHEVROLET AGILE LS 5P" -> 0 items | "CHEVROLET AGILE LS" -> 3 items
+    expect(consultasDeBusqueda({ marca: "CHEVROLET", modelo: "AGILE LS 5P 1.4N", anio: 2016 })[0]).toBe(
+      "CHEVROLET AGILE LS",
+    );
+  });
+
+  it("saca el numero junto con la palabra: un '5' suelto es igual de fatal", () => {
+    expect(
+      consultasDeBusqueda({ marca: "CHEVROLET", modelo: "AGILE LS 5P 1.4N", version: "SEDAN 5 PUERTAS", anio: 2016 }),
+    ).toEqual(["CHEVROLET AGILE LS", "CHEVROLET AGILE LS 1.4 N SEDAN"]);
+  });
+
+  it("saca el 'NUEVO' de marketing, que ABSA no tiene en ninguna descripcion", () => {
+    // "RENAULT NUEVO MASTER" -> 0 items | "RENAULT MASTER L1H1 AA" -> matchea
+    // "MASTER 2.3 DCI FURGON L1H1 AA", que es exactamente el auto pedido.
+    expect(consultasDeBusqueda({ marca: "RENAULT", modelo: "NUEVO MASTER L1H1 AA", version: "FURGON", anio: 2020 })).toEqual([
+      "RENAULT MASTER L1H1 AA",
+      "RENAULT MASTER L1H1 AA FURGON",
+    ]);
+  });
+
+  it("separa la letra del numero como lo escribe ABSA (C3 -> 'C 3')", () => {
+    // "CITROEN C3" -> 0 items | "CITROEN C 3" -> 217 items
+    expect(consultasDeBusqueda({ marca: "CITROEN", modelo: "NUEVO C3 1.6 VTI 115 EXCLUSIVE", anio: 2014 })[0]).toBe(
+      "CITROEN C 3",
+    );
+    expect(consultasDeBusqueda({ marca: "CITROEN", modelo: "C4 LOUNGE 1.6I THP 163 AT6 EXCLUSIVE", anio: 2014 })[0]).toBe(
+      "CITROEN C 4 LOUNGE",
+    );
+  });
+
+  it("saca el año de modelo (AM18), igual que el año de linea (L/21)", () => {
+    expect(consultasDeBusqueda({ marca: "CITROEN", modelo: "C3 VTI 115 AT6 FEEL AM18", anio: 2018 })).toEqual([
+      "CITROEN C 3 VTI 115",
+      "CITROEN C 3 VTI 115 AT6 FEEL",
+    ]);
+  });
+
+  it("no separa codigos que no son letra+digito (L1H1, AT6, C31)", () => {
+    const q = consultasDeBusqueda({ marca: "RENAULT", modelo: "MASTER L1H1", anio: 2020 }).join(" ");
+    expect(q).toContain("L1H1");
+    expect(normalizarDescripcion("AT6")).toBe("AT6");
+    expect(normalizarDescripcion("DFSK C31 BOX")).toBe("DFSK C31 BOX");
+  });
+});
+
+describe("consultasDeRescate", () => {
+  it("va de marca+modelo a marca sola, sin repetir lo que ya se probo", () => {
+    expect(consultasDeRescate({ marca: "RENAULT", modelo: "NUEVO MASTER L1H1 AA", anio: 2020 })).toEqual([
+      "RENAULT MASTER",
+      "RENAULT",
+    ]);
+  });
+
+  it("con un modelo de una letra se lleva tambien el numero (C 3, no C)", () => {
+    expect(consultasDeRescate({ marca: "CITROEN", modelo: "C3 VTI 115 AT6 FEEL AM18", anio: 2018 })).toEqual([
+      "CITROEN C 3",
+      "CITROEN",
+    ]);
+  });
+
+  it("no repite la consulta amplia si ya era marca+primer token", () => {
+    expect(consultasDeRescate({ marca: "FIAT", modelo: "ARGO", anio: 2022 })).toEqual(["FIAT"]);
+  });
+});
+
+/**
+ * La regla del negocio: marca, modelo y año son EXACTOS, solo la version se
+ * elige por parecido. Sin esto, una consulta amplia (o el rescate por marca
+ * sola) deja competir por puntaje a autos de otro modelo, y gana el que
+ * comparte la version — que es el peor error posible, porque da una prima
+ * creible del auto equivocado.
+ */
+describe("esDelModeloPedido", () => {
+  const c = (text: string) => ({ text, value: "1" });
+
+  it("descarta otro modelo aunque comparta toda la version (caso real C3 vs C-ELYSEE)", () => {
+    const pedido = { marca: "CITROEN", modelo: "C3 VTI 115 AT6 FEEL AM18", anio: 2018 };
+    expect(esDelModeloPedido(c("CITROEN - CITROEN - C 3 1.6 VTI FEEL AUT BT"), pedido)).toBe(true);
+    expect(esDelModeloPedido(c("CITROEN - CITROEN - C-ELYSEE VTI 115 FEEL"), pedido)).toBe(false);
+    expect(esDelModeloPedido(c("CITROEN - CITROEN - C 4 LOUNGE 1.6 THP EXCLUSIVE"), pedido)).toBe(false);
+  });
+
+  it("compara por token, no por substring: ARGO no matchea UNO CARGO", () => {
+    const pedido = { marca: "FIAT", modelo: "ARGO", anio: 2022 };
+    expect(esDelModeloPedido(c("FIAT - FIAT - ARGO 1.8 PRECISION L/21"), pedido)).toBe(true);
+    expect(esDelModeloPedido(c("FIAT - FIAT - UNO CARGO"), pedido)).toBe(false);
+    expect(esDelModeloPedido(c("FIAT - FIAT - DUCATO 2.3 MAXICARGO"), pedido)).toBe(false);
+  });
+
+  it("no se deja enganiar por el ruido del formulario (NUEVO, puertas)", () => {
+    const pedido = { marca: "RENAULT", modelo: "NUEVO MASTER L1H1 AA", version: "FURGON", anio: 2020 };
+    expect(esDelModeloPedido(c("RENAULT - RENAULT - MASTER 2.3 DCI FURGON L1H1 AA"), pedido)).toBe(true);
+    expect(esDelModeloPedido(c("RENAULT - RENAULT - KANGOO 1.6 FURGON"), pedido)).toBe(false);
+  });
+});
+
+describe("tokensDeModelo", () => {
+  it("se queda con el nombre del modelo, sin nada de version", () => {
+    expect(tokensDeModelo({ marca: "CHEVROLET", modelo: "AGILE LS 5P 1.4N", anio: 2016 })).toEqual(["AGILE"]);
+    expect(tokensDeModelo({ marca: "RENAULT", modelo: "NUEVO MASTER L1H1 AA", anio: 2020 })).toEqual(["MASTER"]);
+  });
+
+  it("con modelos de una letra se lleva tambien el numero: 'C' solo no identifica nada", () => {
+    expect(tokensDeModelo({ marca: "CITROEN", modelo: "C4 LOUNGE 1.6I THP", anio: 2014 })).toEqual(["C", "4"]);
   });
 });

@@ -167,6 +167,34 @@ Para clavar una versión exacta, `VehiculoInput.codigoCatalogo` = InfoAuto
 saltea la búsqueda entera. La lista para elegirlo sale de
 `npm run versiones -- --marca X --modelo Y --version "…"`.
 
+**Palabras que vuelven la búsqueda vacía.** Como el buscador es un **AND de
+substrings**, un solo término que ABSA no escriba igual devuelve cero items y
+el lead moría como "catálogo no resuelto" aunque el auto exista. Verificado
+contra producción el 2026-08-28, a partir de seis Deals fallidos:
+
+| Lo que manda el formulario | ABSA | Consulta que fallaba | La que anda |
+|---|---|---|---|
+| `C3`, `C4 LOUNGE` | `C 3`, `C 4 LOUNGE` (letra y número separados) | `CITROEN C3` → 0 | `CITROEN C 3` → 217 |
+| `5P` / `SEDAN 5 PUERTAS` | `5 P.`, `3 PTAS`, o nada | `CHEVROLET AGILE LS 5P` → 0 | `CHEVROLET AGILE LS` → 3 |
+| `NUEVO MASTER` | `MASTER` (sin el "nuevo" de marketing) | `RENAULT NUEVO MASTER` → 0 | `RENAULT MASTER` → 40 |
+| `AM18` (año de modelo) | no lo escribe, igual que `L/21` | — | se descarta |
+
+Las dos primeras las resuelve `normalizarDescripcion()` (la separación
+letra/número se aplica **de los dos lados**, así que si alguna marca lo escribe
+junto el matching no cambia); el resto sale de la consulta en
+`consultasDeBusqueda()` pero **se sigue usando para puntuar**, así que no se
+pierde precisión al elegir la versión.
+
+**Rescate cuando igual no alcanza.** Si las consultas normales no traen nada
+—o traen parientes lejanos, caso real: `C3 VTI 115 AT6 FEEL` devolvía un
+`C-ELYSEE` al 2%— se reintenta con `marca + primer token del modelo` y después
+con la marca sola. Las marcas solas **no vienen cortadas** (`CHEVROLET` → 535
+items, `CITROEN` → 352, `VOLKSWAGEN` → 932), así que siempre hay con qué
+rankear. Los candidatos se **unen** a los que ya había y se rankea todo junto:
+el resultado sólo puede mejorar. Se corta apenas el parecido llega a
+`SIMILITUD_ACEPTABLE` o deja de subir, para no gastar requests de más.
+Implementado en `buscarYRankear()` (`src/quote/absaCatalogClient.ts`).
+
 **`id_Entity` — asunción no verificada:** ninguno de los endpoints de
 catálogo de arriba recibe/devuelve `id_Entity`, lo que sugiere que el
 frontend lo genera del lado del cliente (un número de 8 dígitos, ej.

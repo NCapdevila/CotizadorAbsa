@@ -153,8 +153,90 @@ describe("AbsaHttpVehicleCatalogResolver.resolve", () => {
     expect(ids.idEntity).toBe(20168012);
   });
 
+  /**
+   * Caso REAL de produccion (Deal 64411635123, 2026-08-28): el formulario mando
+   * "NUEVO MASTER L1H1 AA" y el lead murio como "catalogo no resuelto". Contra
+   * ABSA real, "RENAULT MASTER" devuelve 40 items e incluye exactamente el auto
+   * pedido — las descripciones de abajo son las que devolvio ABSA.
+   */
+  it("si las consultas normales no traen nada, rescata con una mas amplia en vez de tirar catalogo no resuelto", async () => {
+    // Tal cual lo mando el formulario: "NUEVO" es lo que rompe la busqueda.
+    const MASTER: VehiculoInput = { marca: "RENAULT", modelo: "NUEVO MASTER L1H1 AA", version: "FURGON", anio: 2020 };
+
+    // Lo que hace ABSA con la consulta pegada al texto del formulario: nada.
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetVehiculos")
+      .query({ q: "RENAULT MASTER L1H1 AA", sumaAseguradaMinima: "0" })
+      .reply(200, combo([]));
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetVehiculos")
+      .query({ q: "RENAULT MASTER L1H1 AA FURGON", sumaAseguradaMinima: "0" })
+      .reply(200, combo([]));
+    // El rescate: marca + primer token del modelo.
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetVehiculos")
+      .query({ q: "RENAULT MASTER", sumaAseguradaMinima: "0" })
+      .reply(
+        200,
+        combo([
+          { text: "RENAULT - RENAULT - MASTER 2.3 DCI FURGON L3H2 L/25", value: "360912" },
+          { text: "RENAULT - RENAULT - MASTER 2.3 DCI FURGON L1H1 AA", value: "360699" },
+        ]),
+      );
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetVehiculos")
+      .query({ q: "RENAULT", sumaAseguradaMinima: "0" })
+      .optionally()
+      .reply(200, combo([]));
+    nock(config.ABSA_BASE_URL)
+      .get("/Combo/GetAniosVehiculo")
+      .query({ infoAuto: "360699", esInfoAuto: "true", sumaAseguradaMinima: "0" })
+      .reply(200, combo([{ text: "2020", value: "2020" }]));
+    nock(config.ABSA_BASE_URL)
+      .get("/Data/GetVehiculoInfoAuto")
+      .query({ infoAuto: "360699" })
+      .reply(200, {
+        data: {
+          vehiculo: {
+            id_Vehiculo: 9001,
+            id_MarcaVehiculo: 33,
+            id_ModeloVehiculo: 77,
+            id_OrigenVehiculo: 1,
+            descripcion: "RENAULT - MASTER 2.3 DCI FURGON L1H1 AA",
+          },
+        },
+        success: true,
+      });
+    nock(config.ABSA_BASE_URL)
+      .get("/Localidad/GetLocalidadesApi")
+      .query({ query: "1425" })
+      .reply(200, combo([{ text: "(1425) CAPITAL FEDERAL", value: "313" }]));
+    mockGetLocalidad(313);
+    nock(config.ABSA_BASE_URL)
+      .get("/Data/GetVehiculoSumaAsegurada")
+      .query({ infoAuto: "360699", anio: "2020" })
+      .reply(200, { data: { sumaAsegurada: 30000000 }, success: true });
+    mockNuevaCotizacion(20168013);
+
+    const resolver = buildResolver(storePath);
+    const ids = await resolver.resolve(MASTER, "1425");
+
+    // Lo que importa: cotiza, y cotiza el auto correcto (el L1H1 AA, no el L3H2).
+    expect(ids.infoAuto).toBe(360699);
+    expect(ids.descripcion).toBe("RENAULT - MASTER 2.3 DCI FURGON L1H1 AA");
+  });
+
+  it("el rescate no se cuelga si tampoco encuentra nada: sigue siendo catalogo no resuelto", async () => {
+    nock(config.ABSA_BASE_URL).get("/Combo/GetVehiculos").query(true).times(4).reply(200, combo([]));
+
+    const resolver = buildResolver(storePath);
+    await expect(resolver.resolve({ marca: "RENAULT", modelo: "NUEVO MASTER L1H1 AA", version: "FURGON", anio: 2020 }, "1425")).rejects.toBeInstanceOf(
+      VehicleCatalogUnresolvedError,
+    );
+  });
+
   it("lanza VehicleCatalogUnresolvedError si GetVehiculos no devuelve candidatos", async () => {
-    nock(config.ABSA_BASE_URL).get("/Combo/GetVehiculos").query(true).reply(200, combo([]));
+    nock(config.ABSA_BASE_URL).get("/Combo/GetVehiculos").query(true).times(3).reply(200, combo([]));
 
     const resolver = buildResolver(storePath);
     await expect(resolver.resolve(VEHICULO, "1425")).rejects.toBeInstanceOf(VehicleCatalogUnresolvedError);

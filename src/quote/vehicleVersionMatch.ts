@@ -106,6 +106,13 @@ export function normalizarDescripcion(texto: string): string {
     .replace(/\bL\s*\/\s*\d{2,4}\b/g, " ")
     .replace(/(\d\.\d)\s*T(?![A-Z0-9])/g, "$1 TURBO")
     .replace(/(\d\.\d)(?=[A-Z])/g, "$1 ")
+    // ABSA separa la letra del numero en los modelos que se llaman asi:
+    // escribe "C 3", "C 4 LOUNGE", "C 5 AIRCROSS", y el formulario manda "C3".
+    // Como `/Combo/GetVehiculos` matchea substrings, "C3" no aparece en
+    // ninguna descripcion y la busqueda vuelve vacia. Se aplica de los dos
+    // lados (pedido y catalogo), asi que si alguna marca SI lo escribe junto
+    // los dos quedan igual y el matching no se altera.
+    .replace(/\b([A-Z])(\d)\b/g, "$1 $2")
     .replace(/[^A-Z0-9.]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -280,8 +287,8 @@ export function textoBuscado(vehiculo: VehiculoInput): string {
  */
 export function consultasDeBusqueda(vehiculo: VehiculoInput): string[] {
   const marca = normalizarDescripcion(vehiculo.marca);
-  const modelo = normalizarDescripcion(vehiculo.modelo);
-  const version = normalizarDescripcion(vehiculo.version ?? "");
+  const modelo = sinRuidoDeConsulta(normalizarDescripcion(vehiculo.modelo));
+  const version = sinRuidoDeConsulta(normalizarDescripcion(vehiculo.version ?? ""));
 
   const tokens = modelo.split(" ").filter(Boolean);
   const corte = tokens.findIndex(esTokenDeVersion);
@@ -290,6 +297,85 @@ export function consultasDeBusqueda(vehiculo: VehiculoInput): string[] {
   const amplia = `${marca} ${modeloBase}`.replace(/\s+/g, " ").trim();
   const refinada = `${marca} ${modelo} ${version}`.replace(/\s+/g, " ").trim();
   return refinada === amplia ? [amplia] : [amplia, refinada];
+}
+
+/**
+ * Palabras que el formulario escribe y ABSA no tiene en NINGUNA descripcion.
+ * Como `/Combo/GetVehiculos` es un AND de substrings, una sola de estas vuelve
+ * la consulta vacia aunque el auto exista. Casos reales de produccion:
+ *
+ *   "RENAULT NUEVO MASTER" -> 0    "RENAULT MASTER"      -> 40
+ *   "CHEVROLET AGILE LS 5P" -> 0   "CHEVROLET AGILE LS"  -> 3
+ *
+ * Solo se sacan de la CONSULTA. El texto pedido completo se sigue usando para
+ * puntuar (`rankearCandidatos`), asi que no se pierde precision al elegir: lo
+ * que aca sobra es lo que impide que ABSA devuelva candidatos.
+ */
+function sinRuidoDeConsulta(texto: string): string {
+  return (
+    texto
+      // Puertas: el form manda "5P" o "SEDAN 5 PUERTAS", ABSA escribe "5 P.",
+      // "3 PTAS" o directamente nada. Se saca el numero JUNTO con la palabra:
+      // dejar el "5" suelto es igual de fatal para un AND de substrings.
+      // El \d es de un solo digito para no comerse la cilindrada ("1.6 P...").
+      .replace(/\b\d\s*(PUERTAS|PTAS|P)\b/g, " ")
+      .replace(/\bNUEV[AO]\b/g, " ") // "NUEVO MASTER", "NUEVA SAVEIRO": marketing, ABSA no lo escribe
+      .replace(/\bAM\d{2}\b/g, " ") // año de modelo ("AM18"), como el "L/21" que ya descarta normalizarDescripcion
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
+/**
+ * Consultas de ultimo recurso, cuando las de `consultasDeBusqueda` no
+ * devolvieron NADA y el lead se perderia como "catalogo no resuelto".
+ *
+ * Van de menos a mas amplia y terminan en la marca sola, que siempre trae algo
+ * (CHEVROLET devuelve 535 items, CITROEN 352 — ABSA no corta esas listas). Con
+ * eso el ranking local, que es puro y no cuesta requests, elige la version mas
+ * parecida. Es preferible cotizar la version que mejor matchea —y dejar el
+ * warning con el parecido— antes que no cotizar el lead.
+ */
+export function consultasDeRescate(vehiculo: VehiculoInput): string[] {
+  const marca = normalizarDescripcion(vehiculo.marca);
+  if (!marca) return [];
+
+  const primero = tokensDeModelo(vehiculo).join(" ");
+  const ya = new Set(consultasDeBusqueda(vehiculo));
+  return [`${marca} ${primero}`.trim(), marca].filter((q, i, todas) => q && todas.indexOf(q) === i && !ya.has(q));
+}
+
+/**
+ * Los tokens que identifican al MODELO, sin nada de version: "AGILE",
+ * "MASTER", "C 3". Cuando el modelo arranca con una letra sola se lleva
+ * tambien el numero, porque "C" solo no identifica nada (ver
+ * normalizarDescripcion: ABSA escribe "C 3", "C 4 LOUNGE").
+ */
+export function tokensDeModelo(vehiculo: VehiculoInput): string[] {
+  const tokens = sinRuidoDeConsulta(normalizarDescripcion(vehiculo.modelo)).split(" ").filter(Boolean);
+  return tokens.slice(0, tokens[0] && /^[A-Z]$/.test(tokens[0]) ? 2 : 1);
+}
+
+/**
+ * Si el candidato es del modelo que se pidio.
+ *
+ * Hace falta porque las consultas amplias (sobre todo el rescate por marca
+ * sola) traen el catalogo entero de la marca, y el ranking por parecido puede
+ * coronar a un pariente de OTRO modelo: caso real, para un "C3 VTI 115 FEEL"
+ * ganaba un "C-ELYSEE VTI 115 FEEL" — comparte todo menos lo unico que no se
+ * negocia. La regla del negocio es que marca, modelo y año tienen que ser
+ * exactos y solo la version se elige por parecido, asi que el modelo se filtra
+ * antes de rankear en vez de dejarlo competir por puntaje.
+ *
+ * Compara por TOKEN y no por substring a proposito: "ARGO" no puede matchear
+ * "UNO CARGO" ni "DUCATO MAXICARGO", que es justo lo que ABSA cuela cuando
+ * busca por substring.
+ */
+export function esDelModeloPedido(candidato: CandidatoCatalogo, vehiculo: VehiculoInput): boolean {
+  const pedidos = tokensDeModelo(vehiculo);
+  if (pedidos.length === 0) return true;
+  const tokens = new Set(normalizarDescripcion(candidato.text).split(" "));
+  return pedidos.every((t) => tokens.has(t));
 }
 
 /**
