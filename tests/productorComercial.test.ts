@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   armarTemplateComercial,
   parseCondicionesAseguradoras,
@@ -7,7 +7,7 @@ import {
 import { elegirComision, elegirConfiguracion } from "../src/quote/absaComercialClient.js";
 import { consultasDeProductor, rankearProductores } from "../src/quote/productorMatch.js";
 import { parseComboProductores } from "../src/quote/productoresCatalogo.js";
-import { buscarProductorMapeado, resolverProductor } from "../src/quote/productoresConfig.js";
+import { buscarProductorMapeado, resolverProductor, resolverProductorConCatalogo, resetProductoresConfigCache } from "../src/quote/productoresConfig.js";
 import { BusinessValidationError, UpstreamChangedError } from "../src/quote/errors.js";
 import type { ProductorMapeado } from "../src/quote/productoresConfig.js";
 
@@ -329,5 +329,51 @@ describe("resolverProductor (mapeo del formulario)", () => {
     expect(buscarProductorMapeado("xango")?.idProductor).toBe(9767);
     expect(buscarProductorMapeado("xango motors")).toBeUndefined();
     expect(buscarProductorMapeado("Concesionaria Nueva SA")).toBeUndefined();
+  });
+});
+
+/**
+ * `/Combo/GetProductoresIncremental` se saltea productores que SI estan en el
+ * combo completo del cotizador. Caso real del 2026-08-31: "Vendeme Este Auto"
+ * existia en ABSA como VENDEME ESTE AUTO, CONCESIONARIA (11814), la busqueda
+ * incremental no lo devolvia, y el lead cotizaba con ARDAMA — otro acuerdo
+ * comercial, sin ningun sintoma.
+ */
+describe("resolverProductorConCatalogo: respaldo con el catalogo completo", () => {
+  const CATALOGO = [
+    { value: "11814", text: "VENDEME ESTE AUTO, CONCESIONARIA" },
+    { value: "9714", text: "44STREET" },
+    { value: "7952", text: "CAR WEST C" },
+    { value: "7953", text: "CAR, WEST M" },
+  ];
+  const sinNada = async () => [];
+
+  beforeEach(() => resetProductoresConfigCache());
+
+  it("cuando la incremental no trae nada, encuentra el productor en el catalogo completo", async () => {
+    const r = await resolverProductorConCatalogo("Vendeme Este Auto", sinNada, async () => CATALOGO);
+    expect(r?.idProductor).toBe(11814);
+  });
+
+  it("no consulta el catalogo completo si la incremental ya trajo algo", async () => {
+    let consultas = 0;
+    const r = await resolverProductorConCatalogo(
+      "Vendeme Este Auto",
+      async () => [{ value: "11814", text: "VENDEME ESTE AUTO, CONCESIONARIA" }],
+      async () => { consultas++; return CATALOGO; },
+    );
+    expect(r?.idProductor).toBe(11814);
+    expect(consultas).toBe(0);
+  });
+
+  it("el respaldo no relaja la regla: si empatan varios, no elige ninguno", async () => {
+    const r = await resolverProductorConCatalogo("Car West", sinNada, async () => CATALOGO);
+    expect(r?.idProductor).not.toBe(7952);
+    expect(r?.idProductor).not.toBe(7953);
+  });
+
+  it("si el productor no esta ni en el catalogo completo, cae al de defecto", async () => {
+    const r = await resolverProductorConCatalogo("Concesionario Personal", sinNada, async () => CATALOGO);
+    expect(r?.clave).toBe("ardama");
   });
 });

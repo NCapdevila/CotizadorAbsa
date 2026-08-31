@@ -185,6 +185,16 @@ export function resolverProductor(valor: string | undefined): ProductorMapeado |
  */
 export type BuscadorDeProductores = (query: string) => Promise<CandidatoProductor[]>;
 
+/**
+ * El catalogo COMPLETO de productores. Hace falta como respaldo porque
+ * `/Combo/GetProductoresIncremental` **se saltea algunos**: el 2026-08-31,
+ * "Vendeme Este Auto" existia en ABSA como VENDEME ESTE AUTO, CONCESIONARIA
+ * (11814) y la busqueda incremental no lo devolvia, asi que el lead cotizaba
+ * con ARDAMA. Se consulta SOLO cuando la incremental no encontro nada, y viene
+ * cacheado en disco 24h (ver ./productoresCatalogo.ts).
+ */
+export type CatalogoDeProductores = () => Promise<CandidatoProductor[]>;
+
 /** Lo ya resuelto contra ABSA en este proceso: un productor del formulario se repite en cada lead. */
 const resueltosEnAbsa = new Map<string, ProductorMapeado | null>();
 
@@ -216,6 +226,7 @@ const resueltosEnAbsa = new Map<string, ProductorMapeado | null>();
 export async function resolverProductorConCatalogo(
   valor: string | undefined,
   buscar: BuscadorDeProductores,
+  catalogoCompleto?: CatalogoDeProductores,
 ): Promise<ProductorMapeado | undefined> {
   const pedido = valor?.trim();
   if (!pedido) return resolverProductor(valor);
@@ -225,7 +236,7 @@ export async function resolverProductorConCatalogo(
 
   const clave = normalizarProductor(pedido);
   if (!resueltosEnAbsa.has(clave)) {
-    resueltosEnAbsa.set(clave, await buscarEnAbsa(pedido, buscar));
+    resueltosEnAbsa.set(clave, await buscarEnAbsa(pedido, buscar, catalogoCompleto));
   }
   const enAbsa = resueltosEnAbsa.get(clave);
   if (enAbsa) return enAbsa;
@@ -234,13 +245,28 @@ export async function resolverProductorConCatalogo(
   return resolverProductor(valor);
 }
 
-async function buscarEnAbsa(pedido: string, buscar: BuscadorDeProductores): Promise<ProductorMapeado | null> {
+async function buscarEnAbsa(
+  pedido: string,
+  buscar: BuscadorDeProductores,
+  catalogoCompleto?: CatalogoDeProductores,
+): Promise<ProductorMapeado | null> {
   let candidatos: CandidatoProductor[];
   try {
     const vistos = new Map<string, CandidatoProductor>();
     for (const query of consultasDeProductor(pedido)) {
       for (const item of await buscar(query)) {
         if (!vistos.has(item.value)) vistos.set(item.value, item);
+      }
+    }
+    // La busqueda incremental se saltea productores que SI estan en el combo
+    // completo. Solo se paga esta consulta cuando la otra no trajo nada, y el
+    // catalogo viene cacheado 24h.
+    if (vistos.size === 0 && catalogoCompleto) {
+      for (const item of await catalogoCompleto()) {
+        if (!vistos.has(item.value)) vistos.set(item.value, item);
+      }
+      if (vistos.size > 0) {
+        logger.info({ productor: pedido, candidatos: vistos.size }, "La busqueda incremental no trajo nada: se mira el catalogo completo");
       }
     }
     candidatos = [...vistos.values()];

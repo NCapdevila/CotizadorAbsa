@@ -207,8 +207,10 @@ export class QuoteClient {
     // Con el catalogo de ABSA como segunda oportunidad: si el formulario manda
     // una concesionaria que todavia no esta en el mapeo pero existe en ABSA sin
     // ambiguedad, se cotiza con la suya en vez de con el productor por defecto.
-    const entrada = await resolverProductorConCatalogo(input.productor, (query) =>
-      this.comercialClient.buscarProductores(query),
+    const entrada = await resolverProductorConCatalogo(
+      input.productor,
+      (query) => this.comercialClient.buscarProductores(query),
+      () => this.comercialClient.catalogoDeProductores(),
     );
 
     if (!entrada || entrada.idProductor === base.idProductor) {
