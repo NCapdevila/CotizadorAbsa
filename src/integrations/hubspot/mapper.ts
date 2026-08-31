@@ -109,11 +109,20 @@ function sexoDelLead(payload: HubspotLeadWebhookPayload): "M" | "F" {
 
 export function hubspotPayloadToCotizacionInput(payload: HubspotLeadWebhookPayload): CotizacionInput {
   const faltantes: string[] = [];
-  if (!payload.firstname) faltantes.push("firstname");
-  if (!payload.lastname) faltantes.push("lastname");
-  // OJO: `dni` NO esta en esta lista a proposito. ABSA cotiza sin documento,
-  // asi que un lead sin DNI se cotiza igual en vez de quedar frenado como
-  // "datos incompletos" esperando que alguien lo complete a mano.
+  // OJO: `firstname`, `lastname` y `dni` NO estan en esta lista a proposito.
+  //
+  // El nombre y el apellido NUNCA LLEGAN A ABSA: el payload de cotizacion
+  // manda `Cliente.Nombre` vacio y no tiene `Cliente.Apellido` (ver
+  // toAbsaCotizarPayload). Solo se usan para el texto con el que la cotizacion
+  // queda guardada en el listado y para el PDF propio. El documento tampoco lo
+  // exige ABSA.
+  //
+  // Exigirlos frenaba leads por datos que la cotizacion no usa: medido entre
+  // el 29 y el 31 de agosto de 2026, de 32 leads en "datos incompletos", 24
+  // eran por `lastname` — y de 14 revisados, ninguno tenia apellido cargado en
+  // el Contact ni lo iba a tener. Sin apellido la cotizacion sale igual; lo
+  // unico que pierde es precision en el nombre con que se la encuentra
+  // despues (descripcionCotizacion ya saltea lo que no vino).
   if (!payload.marca_vehiculo) faltantes.push("marca_vehiculo");
   if (!payload.modelo_vehiculo) faltantes.push("modelo_vehiculo");
   if (!payload.anio_vehiculo) faltantes.push("anio_vehiculo");
@@ -144,8 +153,8 @@ export function hubspotPayloadToCotizacionInput(payload: HubspotLeadWebhookPaylo
   const input: CotizacionInput = {
     ramo: "automotor",
     asegurado: {
-      nombre: payload.firstname!,
-      apellido: payload.lastname!,
+      nombre: payload.firstname ?? "",
+      apellido: payload.lastname ?? "",
       documentoTipo: "DNI",
       documentoNumero: payload.dni ? String(payload.dni) : undefined,
       fechaNacimiento: normalizeFecha(payload.fecha_nacimiento),

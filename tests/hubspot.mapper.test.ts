@@ -82,6 +82,20 @@ describe("hubspotPayloadToCotizacionInput", () => {
     expect(hubspotPayloadToCotizacionInput({ ...VALID_PAYLOAD, estado_civil: "soltero" }).asegurado.estadoCivil).toBe(1);
   });
 
+  /**
+   * El nombre y el apellido NUNCA llegan a ABSA: el payload manda
+   * `Cliente.Nombre` vacio y no tiene `Cliente.Apellido`. Solo se usan para el
+   * texto con el que la cotizacion queda guardada. Medido entre el 29 y el 31
+   * de agosto de 2026: de 32 leads frenados por "datos incompletos", 24 eran
+   * por `lastname`, y ninguno de los revisados tenia apellido cargado.
+   */
+  it("sin nombre ni apellido cotiza igual: ABSA no los recibe", () => {
+    const { firstname, lastname, ...sinNombre } = VALID_PAYLOAD;
+    const input = hubspotPayloadToCotizacionInput(sinNombre);
+    expect(input.asegurado.nombre).toBe("");
+    expect(input.asegurado.apellido).toBe("");
+  });
+
   it("marca como dato faltante lo que ABSA exige y el lead no trae", () => {
     const { fecha_nacimiento, ...sinFecha } = VALID_PAYLOAD;
     expect(() => hubspotPayloadToCotizacionInput(sinFecha)).toThrow(/fecha_nacimiento/);
