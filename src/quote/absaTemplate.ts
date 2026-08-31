@@ -260,6 +260,34 @@ export interface ArmarTemplateOpciones {
  * avisan por log pero se mandan igual: ABSA es la autoridad final y un select
  * puede depender de otro campo (ej. las franquicias de Federacion dependen del
  * vehiculo, y en este HTML llegan vacias).
+ *
+ * NO CAMBIAR ESTO POR "usar el valor que ABSA propone". Se probo contra
+ * produccion el 2026-08-31, cotizando un FIAT ARGO 2022 (CP 1425) y mirando si
+ * SAN CRISTOBAL devolvia propuestas. El resultado fue el contrario del
+ * esperado:
+ *
+ *   productor              beneficio                          rebaja  resultado
+ *   ---------------------  ---------------------------------  ------  ---------------
+ *   Ardama (6856)          pc:78002 INVIERNO OFF                  32  13 ops, $336.990
+ *   Ardama                 pc:50502 SUC BS AS - CANAL TRAD.       20  NO cotiza
+ *   Ardama                 pc:50502                                0  NO cotiza
+ *   Madero (7979)          pc:78002 INVIERNO OFF                  32  13 ops, $336.990
+ *   Madero                 pc:50502                            32/20/0  NO cotiza
+ *   Madero                 pc:71101 Campaña Primavera 2025        32  NO cotiza
+ *
+ * Dos cosas, y las dos importan:
+ *
+ * 1. Las opciones del select NO reflejan lo que la aseguradora acepta.
+ *    `ObtenerConfigCotizador` no lista "pc:78002" para Madero, y sin embargo es
+ *    el UNICO valor con el que San Cristobal cotiza. Descartarlo le sacaba 13
+ *    opciones a cada lead de Madero y Cpm (60 -> 47 en la prueba).
+ * 2. No es que la rebaja 32 sea "demasiado" para las otras campañas: Canal
+ *    Tradicional no cotiza ni con 20 ni con 0. En este flujo INVIERNO OFF es la
+ *    unica combinacion que anda, en todos los productores probados.
+ *
+ * Por eso el warning de abajo es informativo y no una señal de que algo este
+ * mal: sirve para saber que ese productor tiene otras opciones si alguna vez
+ * hay que revisarlo a mano, no para "arreglarlo" automaticamente.
  */
 export function armarTemplateComercial(opts: ArmarTemplateOpciones): AbsaComercialTemplate {
   const { base, condiciones, overrides = {} } = opts;
@@ -268,9 +296,11 @@ export function armarTemplateComercial(opts: ArmarTemplateOpciones): AbsaComerci
   for (const [campo, valor] of Object.entries(overrides)) {
     const validas = condiciones.opciones[campo];
     if (validas && validas.length > 0 && !validas.some((o) => o.value === String(valor))) {
+      // Con la etiqueta de cada opcion: sin eso, "pc:71101" no le dice nada a
+      // nadie y hay que ir a pedirle las condiciones a ABSA para entender el aviso.
       logger.warn(
-        { campo, valor, validas: validas.map((o) => o.value) },
-        "Override del mapeo de productores que no es una opcion valida de ABSA para este productor: se manda igual",
+        { campo, valor, validas: validas.map((o) => `${o.value}${o.text ? ` (${o.text})` : ""}`) },
+        "El override no esta entre las opciones que ABSA lista para este productor: se manda igual (a proposito, ver el comentario de armarTemplateComercial)",
       );
     }
     camposPorAseguradora[campo] = valor;
