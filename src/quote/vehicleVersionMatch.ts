@@ -381,8 +381,28 @@ export function tokensDeModelo(vehiculo: VehiculoInput): string[] {
 export function esDelModeloPedido(candidato: CandidatoCatalogo, vehiculo: VehiculoInput): boolean {
   const pedidos = tokensDeModelo(vehiculo);
   if (pedidos.length === 0) return true;
-  const tokens = new Set(normalizarDescripcion(candidato.text).split(" "));
-  return pedidos.every((t) => tokens.has(t));
+  return pedidos.every((t) => tokensDeCandidato(candidato.text).has(t));
+}
+
+/**
+ * Los tokens del candidato MAS las concatenaciones de consecutivos.
+ *
+ * ABSA parte en dos algunos nombres que la marca escribe juntos: el formulario
+ * manda "ECOSPORT" y el catalogo dice "ECO SPORT 2.0 STORM". Sin esto, el
+ * filtro de modelo descartaba los 50 ECO SPORT que el rescate ya habia traido
+ * y el lead moria como "catalogo no resuelto" — dos casos reales el
+ * 2026-08-31.
+ *
+ * Se concatenan PARES de tokens contiguos y se compara igual por token entero,
+ * asi que no vuelve el problema de los substrings: "ARGO" sigue sin matchear
+ * "UNO CARGO", porque los tokens son {UNO, CARGO, UNOCARGO} y ninguno es
+ * "ARGO".
+ */
+function tokensDeCandidato(texto: string): Set<string> {
+  const tokens = normalizarDescripcion(texto).split(" ").filter(Boolean);
+  const todos = new Set(tokens);
+  for (let i = 0; i < tokens.length - 1; i++) todos.add(tokens[i]! + tokens[i + 1]!);
+  return todos;
 }
 
 /**

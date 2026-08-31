@@ -343,3 +343,31 @@ describe("normalizarDescripcion: cantidad de puertas", () => {
     expect(tresPuertas[0]!.value).toBe("1");
   });
 });
+
+/**
+ * ABSA parte en dos algunos nombres que la marca escribe juntos: el formulario
+ * manda "ECOSPORT" y el catalogo dice "ECO SPORT 2.0 STORM". Dos leads reales
+ * murieron asi el 2026-08-31 — el rescate por marca YA habia traido los 50 ECO
+ * SPORT, pero el filtro de modelo los descartaba a todos.
+ */
+describe("esDelModeloPedido: nombres que ABSA parte en dos", () => {
+  const c = (text: string) => ({ text, value: "1" });
+  const ecosport = { marca: "FORD", modelo: "ECOSPORT S 1.6L MT N", anio: 2015 };
+
+  it("ECOSPORT matchea 'ECO SPORT'", () => {
+    expect(esDelModeloPedido(c("FORD - FORD - ECO SPORT 1.6 S           L/13"), ecosport)).toBe(true);
+    expect(esDelModeloPedido(c("FORD - FORD - ECO SPORT 2.0 TITANIUM    L/13"), ecosport)).toBe(true);
+  });
+
+  it("pero sigue descartando otro modelo de la misma marca", () => {
+    expect(esDelModeloPedido(c("FORD - FORD - FIESTA  1.6 5P SE POWER. (KD)"), ecosport)).toBe(false);
+    expect(esDelModeloPedido(c("FORD - FORD - RANGER 3.2 TDI DC 4X4 LTD AT"), ecosport)).toBe(false);
+  });
+
+  it("no reabre el agujero de substring: ARGO sigue sin matchear UNO CARGO", () => {
+    const argo = { marca: "FIAT", modelo: "ARGO", anio: 2022 };
+    expect(esDelModeloPedido(c("FIAT - FIAT - UNO CARGO 1.3 FIRE AA"), argo)).toBe(false);
+    expect(esDelModeloPedido(c("FIAT - FIAT - DUCATO 2.3 TD MAXICARGO L4H2 TA"), argo)).toBe(false);
+    expect(esDelModeloPedido(c("FIAT - FIAT - ARGO 1.8 PRECISION L/21"), argo)).toBe(true);
+  });
+});
