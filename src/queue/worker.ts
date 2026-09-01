@@ -161,12 +161,24 @@ export class LeadWorker {
         return;
       }
 
+      // Va el `err` entero y no solo el mensaje: `serializeError` le saca la URL
+      // y el status del endpoint de ABSA que fallo (ver src/logger.ts), que es
+      // lo unico que permite saber DONDE se rompio. Sin esto, el 2026-09-01
+      // hubo una tanda de "Expected double-quoted property name in JSON" que no
+      // se pudo diagnosticar: el mensaje llegaba al Deal pero el log no lo
+      // tenia, y el Deal no guarda la URL.
       const updated = await this.queue.markFailedOrRetry(job.id, message, this.maxAttempts);
       if (updated?.status === "failed") {
-        logger.error({ jobId: job.id, attempts: updated.attempts }, "Job agoto reintentos, se marca error en HubSpot");
+        logger.error(
+          { err, jobId: job.id, dealId: job.payload.dealId, attempts: updated.attempts },
+          "Job agoto reintentos, se marca error en HubSpot",
+        );
         await this.hubspotClient.updateDealProperties(job.payload.dealId, errorToDealProperties("error_absa", message).properties);
       } else {
-        logger.warn({ jobId: job.id, attempts: updated?.attempts }, "Fallo cotizando, vuelve a la cola para reintento");
+        logger.warn(
+          { err, jobId: job.id, dealId: job.payload.dealId, attempts: updated?.attempts },
+          "Fallo cotizando, vuelve a la cola para reintento",
+        );
       }
     }
   }
